@@ -7,6 +7,7 @@ from typing import List
 
 from .alignment import EvidenceAligner
 from .documents import Document, RetrievedDocument
+from .evaluation import AnswerJudge, LLMAnswerJudge
 from .generation import DEFAULT_MODEL_NAME, EvidenceGenerator, HuggingFaceGenerator
 from .retrieval import DocumentStore, TfidfRetriever
 from .reward import combined_reward
@@ -35,6 +36,9 @@ class RagRlPipeline:
         generator: EvidenceGenerator | None = None,
         model_name: str | None = None,
         generator_kwargs: dict | None = None,
+        answer_judge: AnswerJudge | None = None,
+        judge_model_name: str | None = None,
+        judge_kwargs: dict | None = None,
     ) -> None:
         if top_k <= 0:
             raise ValueError("top_k must be positive")
@@ -43,6 +47,10 @@ class RagRlPipeline:
         if generator is not None and (model_name is not None or generator_kwargs):
             raise ValueError(
                 "Provide either a generator instance or model configuration, not both."
+            )
+        if answer_judge is not None and (judge_model_name is not None or judge_kwargs):
+            raise ValueError(
+                "Provide either an answer judge instance or model configuration, not both."
             )
 
         self.store = DocumentStore(documents)
@@ -54,17 +62,15 @@ class RagRlPipeline:
                 model_name=model_name or DEFAULT_MODEL_NAME,
                 generation_kwargs=generator_kwargs,
             )
+        if answer_judge is not None:
+            self.judge = answer_judge
+        else:
+            self.judge = LLMAnswerJudge(
+                model_name=judge_model_name or DEFAULT_MODEL_NAME,
+                generation_kwargs=judge_kwargs,
+            )
         self.aligner = EvidenceAligner(self.store)
         self.top_k = top_k
-
-    @staticmethod
-    def _normalize_text(text: str) -> str:
-        return " ".join(text.lower().split())
-
-    def _is_answer_correct(self, generated: str, ground_truth: str) -> bool:
-        normalized_generated = self._normalize_text(generated)
-        normalized_truth = self._normalize_text(ground_truth)
-        return normalized_truth in normalized_generated or normalized_generated in normalized_truth
 
     def run(self, query: str, ground_truth: str | None = None) -> RagRlResult:
         """Execute the full pipeline for a single query."""
@@ -77,7 +83,7 @@ class RagRlPipeline:
         is_correct: bool | None = None
         reward = alignment_score
         if ground_truth is not None:
-            is_correct = self._is_answer_correct(generated_answer, ground_truth)
+            is_correct = self.judge.is_correct(query, generated_answer, ground_truth)
             reward = alignment_score * (1.0 if is_correct else 0.0)
 
         return RagRlResult(
