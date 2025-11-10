@@ -20,7 +20,9 @@ class RagRlResult:
     pre_evidence: List[RetrievedDocument]
     generated_answer: str
     post_evidence: List[RetrievedDocument]
+    alignment_score: float
     reward: float
+    is_correct: bool | None = None
 
 
 class RagRlPipeline:
@@ -55,14 +57,38 @@ class RagRlPipeline:
         self.aligner = EvidenceAligner(self.store)
         self.top_k = top_k
 
-    def run(self, query: str) -> RagRlResult:
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join(text.lower().split())
+
+    def _is_answer_correct(self, generated: str, ground_truth: str) -> bool:
+        normalized_generated = self._normalize_text(generated)
+        normalized_truth = self._normalize_text(ground_truth)
+        return normalized_truth in normalized_generated or normalized_generated in normalized_truth
+
+    def run(self, query: str, ground_truth: str | None = None) -> RagRlResult:
         """Execute the full pipeline for a single query."""
 
         pre_evidence = self.retriever.retrieve(query, top_k=self.top_k)
         generated_answer = self.generator.generate(query, pre_evidence)
         post_evidence = self.aligner.align(generated_answer, pre_evidence, top_k=self.top_k)
-        reward = combined_reward(self.store, pre_evidence, post_evidence)
-        return RagRlResult(query, pre_evidence, generated_answer, post_evidence, reward)
+        alignment_score = combined_reward(self.store, pre_evidence, post_evidence)
+
+        is_correct: bool | None = None
+        reward = alignment_score
+        if ground_truth is not None:
+            is_correct = self._is_answer_correct(generated_answer, ground_truth)
+            reward = alignment_score * (1.0 if is_correct else 0.0)
+
+        return RagRlResult(
+            query,
+            pre_evidence,
+            generated_answer,
+            post_evidence,
+            alignment_score,
+            reward,
+            is_correct,
+        )
 
 
 __all__ = ["RagRlPipeline", "RagRlResult"]

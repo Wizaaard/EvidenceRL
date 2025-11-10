@@ -8,6 +8,12 @@ from .documents import RetrievedDocument
 from .retrieval import DocumentStore, cosine_similarity, mean_vector
 
 
+def _to_signed_range(score: float) -> float:
+    """Scale a [0, 1] score into the [-1, 1] range."""
+
+    return max(-1.0, min(1.0, (score * 2.0) - 1.0))
+
+
 def reward_overlap(pre_docs: Iterable[RetrievedDocument], post_docs: Iterable[RetrievedDocument]) -> float:
     """Compute the fraction of overlapping document identifiers."""
 
@@ -45,13 +51,15 @@ def combined_reward(
     if not 0.0 <= weight_overlap <= 1.0:
         raise ValueError("weight_overlap must be within [0, 1]")
 
-    overlap = reward_overlap(pre_docs, post_docs)
-    embedding = reward_embedding_similarity(store, pre_docs, post_docs)
-    return weight_overlap * overlap + (1.0 - weight_overlap) * embedding
+    overlap = _to_signed_range(reward_overlap(pre_docs, post_docs))
+    embedding = _to_signed_range(reward_embedding_similarity(store, pre_docs, post_docs))
+    combined = weight_overlap * overlap + (1.0 - weight_overlap) * embedding
+    return max(-1.0, min(1.0, combined))
 
 
 __all__ = [
     "reward_overlap",
     "reward_embedding_similarity",
     "combined_reward",
+    "_to_signed_range",
 ]

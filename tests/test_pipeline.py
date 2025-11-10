@@ -4,23 +4,47 @@ from evidence_rl.generation import HuggingFaceGenerator
 
 def test_pipeline_runs():
     documents = [
-        Document(doc_id="a", text="alpha beta gamma"),
-        Document(doc_id="b", text="beta gamma delta"),
-        Document(doc_id="c", text="delta epsilon zeta"),
+        Document(
+            doc_id="htn-overview",
+            text="Chronic hypertension complicates roughly 1-2% of pregnancies.",
+        ),
+        Document(
+            doc_id="htn-therapy",
+            text="Labetalol is recommended as a first-line oral agent for chronic hypertension in pregnancy.",
+        ),
+        Document(
+            doc_id="htn-dosing",
+            text="Initial labetalol dosing is commonly 100 mg twice daily with titration as needed.",
+        ),
+        Document(
+            doc_id="htn-alt",
+            text="Nifedipine extended release can be used when labetalol is contraindicated.",
+        ),
+        Document(
+            doc_id="htn-prevent",
+            text="Low-dose aspirin starting in the late first trimester reduces the risk of preeclampsia.",
+        ),
     ]
-    
+
     class DummyGenerator:
         def generate(self, query, retrieved):
             del query
-            return " ".join(item.document.text for item in retrieved)
+            del retrieved
+            return "First-line therapy for chronic hypertension in pregnancy is labetalol."
 
-    pipeline = RagRlPipeline(documents, top_k=2, generator=DummyGenerator())
-    result = pipeline.run("beta gamma usage")
+    pipeline = RagRlPipeline(documents, top_k=3, generator=DummyGenerator())
+    result = pipeline.run(
+        "What is the recommended first-line therapy for chronic hypertension in pregnancy?",
+        ground_truth="First-line therapy for chronic hypertension in pregnancy is labetalol.",
+    )
 
     assert result.pre_evidence
     assert result.post_evidence
-    assert 0.0 <= result.reward <= 1.0
+    assert -1.0 <= result.alignment_score <= 1.0
+    assert -1.0 <= result.reward <= 1.0
     assert result.generated_answer
+    assert result.is_correct is True
+    assert result.reward == result.alignment_score
 
 
 def test_huggingface_generator_builds_prompt():
@@ -161,3 +185,26 @@ def test_huggingface_generator_single_gpu_moves_model(monkeypatch):
     assert recorded["model_kwargs"] == {}
     assert recorded["to"] == "cuda:0"
     assert recorded["pipeline_kwargs"] == {"device": 0}
+
+
+def test_incorrect_answer_zero_reward():
+    documents = [
+        Document(doc_id="guideline", text="Urinary tract infections are treated with nitrofurantoin in pregnancy."),
+        Document(doc_id="alt", text="Fosfomycin is an alternative single-dose therapy for acute cystitis."),
+        Document(doc_id="avoid", text="Fluoroquinolones should be avoided in pregnancy due to fetal toxicity."),
+    ]
+
+    class IncorrectGenerator:
+        def generate(self, query, retrieved):
+            del query, retrieved
+            return "Penicillin is the best choice for acute cystitis in pregnancy."
+
+    pipeline = RagRlPipeline(documents, top_k=2, generator=IncorrectGenerator())
+    result = pipeline.run(
+        "How should acute cystitis be treated during pregnancy?",
+        ground_truth="Nitrofurantoin is recommended for acute cystitis in pregnancy.",
+    )
+
+    assert result.is_correct is False
+    assert result.reward == 0.0
+    assert -1.0 <= result.alignment_score <= 1.0

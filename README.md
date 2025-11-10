@@ -13,6 +13,13 @@ steps:
    retrieved passages to identify which ones were actually used.
 4. **Compute a reward** by combining overlap in document identifiers with
    embedding similarity between the pre- and post-generation evidence sets.
+   The resulting alignment score ranges from -1 (mismatched evidence) to +1
+   (perfect alignment).
+
+When ground-truth answers are available—such as in our simulated clinical
+question answering example—the alignment score is multiplied by an accuracy
+flag. Correct answers keep their evidence-based reward, while incorrect
+answers receive a score of zero to reflect the model's uncertainty.
 
 The code lives in `src/evidence_rl` and is designed to be easy to extend with
 more sophisticated models or reward functions.
@@ -30,9 +37,10 @@ python main.py
 ```
 
 The first run downloads the default `sshleifer/tiny-gpt2` checkpoint used for
-answer generation.  Subsequent runs print the query, the evidence retrieved
-before generation, the model's answer, the evidence inferred from the answer,
-and the final reward value.
+answer generation.  Subsequent runs print the query, the clinical guideline
+ground truth, the evidence retrieved before generation, the model's answer, the
+evidence inferred from the answer, the alignment score, and the final reward
+value (which is zeroed out whenever the answer is incorrect).
 
 If CUDA devices are available, the generator automatically runs on GPU.  A
 single GPU loads the model onto `cuda:0`, while multi-GPU setups leverage
@@ -51,4 +59,5 @@ pytest
 To experiment with a different generator, pass the `model_name` parameter when
 constructing `RagRlPipeline`, or create your own generator implementation that
 follows the `EvidenceGenerator` protocol and supply it via the `generator`
-argument.
+argument.  You can also supply ground-truth answers to `pipeline.run` to obtain
+the accuracy-aware reward used in reinforcement learning experiments.

@@ -15,30 +15,35 @@ from evidence_rl import Document, RagRlPipeline
 
 SAMPLE_DOCUMENTS = [
     Document(
-        doc_id="doc1",
-        text=(
-            "Reinforcement learning optimizes policies via trial and error. "
-            "In retrieval-augmented systems, policy improvements can encourage "
-            "models to ground answers in external knowledge bases."
-        ),
+        doc_id="preeclampsia-prevention",
+        text="Begin low-dose aspirin at 12 weeks gestation in patients at high risk of preeclampsia.",
     ),
     Document(
-        doc_id="doc2",
-        text=(
-            "Retrieval-augmented generation (RAG) pipelines first retrieve "
-            "relevant passages and then generate answers conditioned on that "
-            "evidence.  High-quality retrieval is essential for factual outputs."
-        ),
+        doc_id="htn-background",
+        text="Chronic hypertension complicates up to two percent of pregnancies and increases adverse outcomes.",
     ),
     Document(
-        doc_id="doc3",
-        text=(
-            "Reward models can evaluate alignment between generated answers and "
-            "ground-truth evidence.  Similarity-based rewards provide a cheap "
-            "signal compared to manual labeling."
-        ),
+        doc_id="htn-first-line",
+        text="ACOG guidelines recommend labetalol as a first-line oral agent for chronic hypertension in pregnancy.",
+    ),
+    Document(
+        doc_id="htn-dosing",
+        text="Typical labetalol dosing starts at 100 mg twice daily with titration every few days.",
+    ),
+    Document(
+        doc_id="htn-second-line",
+        text="Nifedipine extended release is an effective alternative when labetalol is contraindicated.",
+    ),
+    Document(
+        doc_id="htn-severe",
+        text="Severe-range blood pressures require intravenous therapy such as labetalol or hydralazine.",
     ),
 ]
+
+SAMPLE_CASE = {
+    "query": "What medication is first-line for treating chronic hypertension during pregnancy?",
+    "ground_truth": "Labetalol is recommended as first-line therapy for chronic hypertension in pregnancy.",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,10 +69,10 @@ def main(argv: list[str] | None = None) -> None:
             print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
             return
         raise
-    query = "How can reinforcement learning encourage better evidence usage in RAG?"
-    result = pipeline.run(query)
+    result = pipeline.run(SAMPLE_CASE["query"], ground_truth=SAMPLE_CASE["ground_truth"])
 
     print(f"Query: {result.query}")
+    print(f"Ground truth: {SAMPLE_CASE['ground_truth']}")
     print("Pre-generation evidence:")
     for item in result.pre_evidence:
         print(f"  - {item.document.doc_id}: score={item.score:.3f}")
@@ -75,6 +80,8 @@ def main(argv: list[str] | None = None) -> None:
     print("Post-generation evidence:")
     for item in result.post_evidence:
         print(f"  - {item.document.doc_id}: score={item.score:.3f}")
+    print(f"Alignment score: {result.alignment_score:.3f}")
+    print(f"Correct answer: {result.is_correct}")
     print(f"Reward: {result.reward:.3f}")
 
 
