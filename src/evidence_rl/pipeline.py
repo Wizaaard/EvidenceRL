@@ -7,7 +7,7 @@ from typing import List
 
 from .alignment import EvidenceAligner
 from .documents import Document, RetrievedDocument
-from .generation import EvidenceConcatenationGenerator
+from .generation import DEFAULT_MODEL_NAME, EvidenceGenerator, HuggingFaceGenerator
 from .retrieval import DocumentStore, TfidfRetriever
 from .reward import combined_reward
 
@@ -30,16 +30,28 @@ class RagRlPipeline:
         self,
         documents: List[Document],
         top_k: int = 3,
-        generator: EvidenceConcatenationGenerator | None = None,
+        generator: EvidenceGenerator | None = None,
+        model_name: str | None = None,
+        generator_kwargs: dict | None = None,
     ) -> None:
         if top_k <= 0:
             raise ValueError("top_k must be positive")
         if not documents:
             raise ValueError("Pipeline requires at least one document")
+        if generator is not None and (model_name is not None or generator_kwargs):
+            raise ValueError(
+                "Provide either a generator instance or model configuration, not both."
+            )
 
         self.store = DocumentStore(documents)
         self.retriever = TfidfRetriever(self.store)
-        self.generator = generator or EvidenceConcatenationGenerator()
+        if generator is not None:
+            self.generator = generator
+        else:
+            self.generator = HuggingFaceGenerator(
+                model_name=model_name or DEFAULT_MODEL_NAME,
+                generation_kwargs=generator_kwargs,
+            )
         self.aligner = EvidenceAligner(self.store)
         self.top_k = top_k
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -40,8 +41,29 @@ SAMPLE_DOCUMENTS = [
 ]
 
 
-def main() -> None:
-    pipeline = RagRlPipeline(SAMPLE_DOCUMENTS, top_k=2)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the EvidenceRL demo pipeline")
+    parser.add_argument(
+        "--model-name",
+        default=None,
+        help=(
+            "Optional Hugging Face model identifier to use for answer generation. "
+            "Defaults to a small GPT-2 checkpoint."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+
+    try:
+        pipeline = RagRlPipeline(SAMPLE_DOCUMENTS, top_k=2, model_name=args.model_name)
+    except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
+        if exc.name == "transformers":
+            print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
+            return
+        raise
     query = "How can reinforcement learning encourage better evidence usage in RAG?"
     result = pipeline.run(query)
 
