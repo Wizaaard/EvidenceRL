@@ -34,6 +34,11 @@ answer generation.  Subsequent runs print the query, the evidence retrieved
 before generation, the model's answer, the evidence inferred from the answer,
 and the final reward value.
 
+If CUDA devices are available, the generator automatically runs on GPU.  A
+single GPU loads the model onto `cuda:0`, while multi-GPU setups leverage
+`device_map="auto"` so the weights are distributed across all visible GPUs
+without extra configuration.
+
 ## Running Tests
 
 ```bash

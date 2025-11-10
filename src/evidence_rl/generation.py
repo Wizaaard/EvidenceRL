@@ -51,15 +51,55 @@ class HuggingFaceGenerator:
         self._generation_kwargs = dict(base_kwargs)
 
         if self.text_pipeline is None:
-            from transformers import pipeline as hf_pipeline
-
-            self._pipeline = hf_pipeline(
-                "text-generation",
-                model=self.model_name,
-                tokenizer=self.model_name,
-            )
+            self._pipeline = self._build_hf_pipeline()
         else:
             self._pipeline = self.text_pipeline
+
+    def _build_hf_pipeline(self) -> Callable[..., List[Mapping[str, str]]]:
+        """Instantiate a Hugging Face pipeline with GPU-aware placement."""
+
+        try:
+            import torch
+        except ImportError:  # pragma: no cover - torch may be absent in tests
+            torch = None  # type: ignore[assignment]
+
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            pipeline as hf_pipeline,
+        )
+
+        model_kwargs: MutableMapping[str, Any] = {}
+        pipeline_kwargs: MutableMapping[str, Any] = {}
+
+        multi_gpu = False
+        if torch is not None and torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+            if gpu_count > 1:
+                multi_gpu = True
+                model_kwargs["device_map"] = "auto"
+            else:
+                pipeline_kwargs["device"] = 0
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+
+        if not multi_gpu and pipeline_kwargs.get("device") == 0:
+            model.to("cuda:0")
+
+        if not pipeline_kwargs:
+            return hf_pipeline(
+                "text-generation",
+                model=model,
+                tokenizer=tokenizer,
+            )
+
+        return hf_pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            **pipeline_kwargs,
+        )
 
     def _format_evidence(self, retrieved: Iterable[RetrievedDocument]) -> str:
         lines: List[str] = []

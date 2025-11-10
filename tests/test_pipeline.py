@@ -49,3 +49,115 @@ def test_huggingface_generator_builds_prompt():
     assert captured["kwargs"]["do_sample"] is False
     assert captured["kwargs"]["max_new_tokens"] == 128
     assert answer.strip() == "Generated."
+
+
+def test_huggingface_generator_multi_gpu_uses_device_map(monkeypatch):
+    import sys
+    import types
+
+    recorded: dict[str, object] = {}
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 2,
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    fake_transformers = types.SimpleNamespace()
+
+    def fake_model_loader(name: str, **kwargs):
+        recorded["model_kwargs"] = kwargs
+
+        class FakeModel:
+            def to(self, device: str) -> None:
+                recorded["to"] = device
+
+        return FakeModel()
+
+    def fake_tokenizer_loader(name: str):
+        recorded["tokenizer_name"] = name
+        return "TOKENIZER"
+
+    def fake_pipeline(task: str, model=None, tokenizer=None, **kwargs):
+        recorded["pipeline_task"] = task
+        recorded["pipeline_kwargs"] = kwargs
+
+        def runner(prompt: str, **unused):  # type: ignore[override]
+            return [{"generated_text": prompt}]
+
+        return runner
+
+    fake_transformers.AutoModelForCausalLM = types.SimpleNamespace(
+        from_pretrained=fake_model_loader
+    )
+    fake_transformers.AutoTokenizer = types.SimpleNamespace(
+        from_pretrained=fake_tokenizer_loader
+    )
+    fake_transformers.pipeline = fake_pipeline
+
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    generator = HuggingFaceGenerator()
+    generator.generate("question", [])
+
+    assert recorded["model_kwargs"] == {"device_map": "auto"}
+    assert "to" not in recorded
+    assert recorded["pipeline_kwargs"] == {}
+
+
+def test_huggingface_generator_single_gpu_moves_model(monkeypatch):
+    import sys
+    import types
+
+    recorded: dict[str, object] = {}
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    fake_transformers = types.SimpleNamespace()
+
+    def fake_model_loader(name: str, **kwargs):
+        recorded["model_kwargs"] = kwargs
+
+        class FakeModel:
+            def to(self, device: str) -> None:
+                recorded["to"] = device
+
+        return FakeModel()
+
+    def fake_tokenizer_loader(name: str):
+        recorded["tokenizer_name"] = name
+        return "TOKENIZER"
+
+    def fake_pipeline(task: str, model=None, tokenizer=None, **kwargs):
+        recorded["pipeline_task"] = task
+        recorded["pipeline_kwargs"] = kwargs
+
+        def runner(prompt: str, **unused):  # type: ignore[override]
+            return [{"generated_text": prompt}]
+
+        return runner
+
+    fake_transformers.AutoModelForCausalLM = types.SimpleNamespace(
+        from_pretrained=fake_model_loader
+    )
+    fake_transformers.AutoTokenizer = types.SimpleNamespace(
+        from_pretrained=fake_tokenizer_loader
+    )
+    fake_transformers.pipeline = fake_pipeline
+
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    generator = HuggingFaceGenerator()
+    generator.generate("question", [])
+
+    assert recorded["model_kwargs"] == {}
+    assert recorded["to"] == "cuda:0"
+    assert recorded["pipeline_kwargs"] == {"device": 0}
