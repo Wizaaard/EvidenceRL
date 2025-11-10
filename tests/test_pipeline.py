@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+import json
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -49,9 +50,11 @@ SYNTHETIC_DOCUMENTS: List[Document] = [
 class ScriptedGenerator:
     def __init__(self, responses: Dict[str, str]):
         self.responses = responses
+        self.last_prompt = None
 
     def generate(self, query: str, retrieved: Iterable) -> str:  # type: ignore[override]
         del retrieved
+        self.last_prompt = f"prompt::{query}"
         return self.responses[query]
 
 
@@ -59,9 +62,11 @@ class ScriptedJudge:
     def __init__(self, verdicts: Dict[str, bool]):
         self.verdicts = verdicts
         self.calls: List[tuple[str, str, str]] = []
+        self.last_prompt = None
 
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
         self.calls.append((query, answer, ground_truth))
+        self.last_prompt = f"judge::{query}::{answer}"
         return self.verdicts[query]
 
 
@@ -134,6 +139,35 @@ def test_pipeline_multiple_queries_handles_mixed_correctness():
     assert any(flag is True for flag in correctness_flags)
     assert any(flag is False for flag in correctness_flags)
     assert any(score == 0.0 for score in rewards)
+
+
+def test_pipeline_can_persist_results(tmp_path):
+    query = "Which medication prevents preeclampsia in high-risk pregnancies?"
+    ground_truth = "Low-dose aspirin beginning in the late first trimester reduces preeclampsia risk."
+
+    generator = ScriptedGenerator({query: "Low-dose aspirin started in late first trimester lowers risk."})
+    judge = ScriptedJudge({query: True})
+
+    pipeline = RagRlPipeline(
+        SYNTHETIC_DOCUMENTS,
+        top_k=2,
+        generator=generator,
+        answer_judge=judge,
+    )
+
+    output_path = tmp_path / "result.json"
+    result = pipeline.run(query, ground_truth=ground_truth, save_path=output_path)
+
+    assert output_path.exists()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert payload["query"] == query
+    assert payload["ground_truth"] == ground_truth
+    assert payload["generated_answer"] == result.generated_answer
+    assert payload["generator_prompt"] == result.generator_prompt == f"prompt::{query}"
+    assert payload["judge_prompt"] == result.judge_prompt == f"judge::{query}::{result.generated_answer}"
+    assert isinstance(payload["pre_evidence"], list) and payload["pre_evidence"]
+    assert isinstance(payload["post_evidence"], list) and payload["post_evidence"]
 
 
 def test_huggingface_generator_builds_prompt():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Iterable, List
@@ -92,9 +93,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--judge-model-name",
+        default=None,
+        help=(
+            "Optional Hugging Face model identifier for the LLM answer judge. "
+            "Defaults to the same checkpoint as the generator."
+        ),
+    )
+    parser.add_argument(
         "--plot-dir",
         default=None,
         help="Directory where reward/alignment distribution plots will be written.",
+    )
+    parser.add_argument(
+        "--json-output",
+        default=None,
+        help="Path where pipeline results will be written as JSON (file or directory).",
     )
     return parser
 
@@ -120,10 +134,23 @@ def format_case_output(result: RagRlResult, ground_truth: str) -> str:
     )
 
 
-def run_cases(pipeline: RagRlPipeline, cases: Iterable[dict[str, str]]) -> List[RagRlResult]:
+def run_cases(
+    pipeline: RagRlPipeline,
+    cases: Iterable[dict[str, str]],
+    save_dir: Path | None = None,
+) -> List[RagRlResult]:
     results: List[RagRlResult] = []
-    for case in cases:
-        result = pipeline.run(case["query"], ground_truth=case.get("ground_truth"))
+    if save_dir is not None:
+        save_dir.mkdir(parents=True, exist_ok=True)
+    for index, case in enumerate(cases, start=1):
+        json_path = None
+        if save_dir is not None:
+            json_path = save_dir / f"case_{index:02d}.json"
+        result = pipeline.run(
+            case["query"],
+            ground_truth=case.get("ground_truth"),
+            save_path=json_path,
+        )
         results.append(result)
         print(format_case_output(result, case.get("ground_truth", "")))
     return results
@@ -177,18 +204,44 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
     try:
-        pipeline = RagRlPipeline(SAMPLE_DOCUMENTS, top_k=3, model_name=args.model_name)
+        pipeline = RagRlPipeline(
+            SAMPLE_DOCUMENTS,
+            top_k=3,
+            model_name=args.model_name,
+            judge_model_name=args.judge_model_name,
+        )
     except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
         if exc.name == "transformers":
             print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
             return
         raise
 
-    results = run_cases(pipeline, SAMPLE_CASES)
+    per_case_dir: Path | None = None
+    summary_path: Path | None = None
+    if args.json_output:
+        output_path = Path(args.json_output)
+        if output_path.suffix.lower() == ".json":
+            summary_path = output_path
+        else:
+            per_case_dir = output_path
+            summary_path = output_path / "results.json"
+
+    results = run_cases(pipeline, SAMPLE_CASES, save_dir=per_case_dir)
 
     if args.plot_dir:
         plot_distributions(results, args.plot_dir)
         print(f"Saved plots to {Path(args.plot_dir).resolve()}")
+
+    if summary_path is not None:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "model_name": getattr(pipeline.generator, "model_name", args.model_name),
+            "judge_model_name": getattr(pipeline.judge, "model_name", args.judge_model_name),
+            "results": [result.to_dict() for result in results],
+        }
+        with summary_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+        print(f"Saved JSON results to {summary_path.resolve()}")
 
 
 if __name__ == "__main__":

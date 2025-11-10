@@ -51,6 +51,7 @@ class LLMAnswerJudge:
             self._pipeline = self._build_hf_pipeline()
         else:
             self._pipeline = self.text_pipeline
+        self.last_prompt: str | None = None
 
     def _build_hf_pipeline(self) -> Callable[..., List[Mapping[str, str]]]:
         """Instantiate a GPU-aware Hugging Face text-generation pipeline."""
@@ -121,6 +122,7 @@ class LLMAnswerJudge:
 
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
         prompt = self._build_prompt(query, answer, ground_truth)
+        self.last_prompt = prompt
         outputs = self._pipeline(prompt, **self._generation_kwargs)
         verdict = self._extract_verdict(outputs, prompt)
         return verdict.startswith("correct")

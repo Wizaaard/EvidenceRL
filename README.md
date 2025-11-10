@@ -35,7 +35,7 @@ demo script:
 python -m venv .venv
 source .venv/bin/activate
 pip install transformers pytest matplotlib
-python main.py --plot-dir plots
+python main.py --plot-dir plots --json-output runs/
 ```
 
 The first run downloads the default `sshleifer/tiny-gpt2` checkpoint used for
@@ -50,6 +50,13 @@ run on GPU.  A single GPU loads the model onto `cuda:0`, while multi-GPU setups
 leverage `device_map="auto"` so the weights are distributed across all visible
 GPUs without extra configuration.
 
+Supplying `--json-output` writes detailed intermediate artifacts for each case
+into the provided directory (for example `runs/case_01.json`) and produces an
+aggregated `results.json` summary that includes prompts, retrieved evidence, the
+generated answer, correctness flags, and reward values.  Passing a filename such
+as `--json-output results.json` skips the per-case files and only writes the
+summary payload.
+
 ## Running Tests
 
 ```bash
@@ -61,6 +68,9 @@ pytest
 
 To experiment with a different generator or judge, pass the `model_name` (for
 the generator) or `judge_model_name` (for the LLM answer judge) parameters when
-constructing `RagRlPipeline`.  You can also implement custom components that
-follow the exposed `EvidenceGenerator` and `AnswerJudge` protocols and supply
-them via the `generator` and `answer_judge` arguments.
+constructing `RagRlPipeline` or use the corresponding command-line arguments in
+`main.py`.  Each `RagRlResult` instance also exposes `to_dict()` and
+`save_json()` helpers so programmatic callers can persist intermediate artifacts
+with custom naming schemes.  You can implement custom components that follow the
+exposed `EvidenceGenerator` and `AnswerJudge` protocols and supply them via the
+`generator` and `answer_judge` arguments.

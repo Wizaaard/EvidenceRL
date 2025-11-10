@@ -54,6 +54,7 @@ class HuggingFaceGenerator:
             self._pipeline = self._build_hf_pipeline()
         else:
             self._pipeline = self.text_pipeline
+        self.last_prompt: str | None = None
 
     def _build_hf_pipeline(self) -> Callable[..., List[Mapping[str, str]]]:
         """Instantiate a Hugging Face pipeline with GPU-aware placement."""
@@ -123,6 +124,7 @@ class HuggingFaceGenerator:
     def generate(self, query: str, retrieved: Iterable[RetrievedDocument]) -> str:
         retrieved_list = list(retrieved)
         prompt = self._build_prompt(query, retrieved_list)
+        self.last_prompt = prompt
         outputs = self._pipeline(prompt, **self._generation_kwargs)
         if not outputs:
             return ""

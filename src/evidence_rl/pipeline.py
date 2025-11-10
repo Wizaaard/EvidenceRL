@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import List
+from pathlib import Path
+from typing import Iterable, List
 
 from .alignment import EvidenceAligner
 from .documents import Document, RetrievedDocument
@@ -24,6 +26,45 @@ class RagRlResult:
     alignment_score: float
     reward: float
     is_correct: bool | None = None
+    generator_prompt: str | None = None
+    ground_truth: str | None = None
+    judge_prompt: str | None = None
+
+    @staticmethod
+    def _serialize_evidence(items: Iterable[RetrievedDocument]) -> List[dict[str, object]]:
+        return [
+            {
+                "doc_id": item.document.doc_id,
+                "text": item.document.text,
+                "metadata": item.document.metadata,
+                "score": float(item.score),
+            }
+            for item in items
+        ]
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serialisable representation of the result."""
+
+        return {
+            "query": self.query,
+            "ground_truth": self.ground_truth,
+            "generator_prompt": self.generator_prompt,
+            "generated_answer": self.generated_answer,
+            "pre_evidence": self._serialize_evidence(self.pre_evidence),
+            "post_evidence": self._serialize_evidence(self.post_evidence),
+            "alignment_score": float(self.alignment_score),
+            "reward": float(self.reward),
+            "is_correct": self.is_correct,
+            "judge_prompt": self.judge_prompt,
+        }
+
+    def save_json(self, path: str | Path) -> None:
+        """Persist the result to ``path`` in JSON format."""
+
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2, ensure_ascii=False)
 
 
 class RagRlPipeline:
@@ -72,7 +113,12 @@ class RagRlPipeline:
         self.aligner = EvidenceAligner(self.store)
         self.top_k = top_k
 
-    def run(self, query: str, ground_truth: str | None = None) -> RagRlResult:
+    def run(
+        self,
+        query: str,
+        ground_truth: str | None = None,
+        save_path: str | Path | None = None,
+    ) -> RagRlResult:
         """Execute the full pipeline for a single query."""
 
         pre_evidence = self.retriever.retrieve(query, top_k=self.top_k)
@@ -82,11 +128,15 @@ class RagRlPipeline:
 
         is_correct: bool | None = None
         reward = alignment_score
+        judge_prompt: str | None = None
         if ground_truth is not None:
             is_correct = self.judge.is_correct(query, generated_answer, ground_truth)
             reward = alignment_score * (1.0 if is_correct else 0.0)
+            judge_prompt = getattr(self.judge, "last_prompt", None)
 
-        return RagRlResult(
+        generator_prompt = getattr(self.generator, "last_prompt", None)
+
+        result = RagRlResult(
             query,
             pre_evidence,
             generated_answer,
@@ -94,7 +144,15 @@ class RagRlPipeline:
             alignment_score,
             reward,
             is_correct,
+            generator_prompt=generator_prompt,
+            ground_truth=ground_truth,
+            judge_prompt=judge_prompt,
         )
+
+        if save_path is not None:
+            result.save_json(save_path)
+
+        return result
 
 
 __all__ = ["RagRlPipeline", "RagRlResult"]
