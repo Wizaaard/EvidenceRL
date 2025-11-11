@@ -104,7 +104,6 @@ class ScriptedJudge:
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
         self.calls.append((query, answer, ground_truth))
         self.last_prompt = f"judge::{query}::{answer}"
-        self.last_answer = "correct" if self.verdicts[query] else "incorrect"
         return self.verdicts[query]
 
 
@@ -373,7 +372,7 @@ def test_llm_answer_judge_prompt_and_parsing():
     assert captured["kwargs"]["return_full_text"] is True
     assert captured["kwargs"]["do_sample"] is False
     assert verdict is True
-    assert judge.last_answer == "correct."
+    assert judge.last_answer == "true."
 
 
 def test_llm_answer_judge_gpu_behaviour_matches_generator(monkeypatch):

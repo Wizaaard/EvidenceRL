@@ -42,10 +42,20 @@ class HuggingFaceGenerator:
 
     def __post_init__(self) -> None:
         base_kwargs: MutableMapping[str, Any] = {
-            "max_new_tokens": 128,
-            "return_full_text": True,
-            "do_sample": False,
+            # --- sampling ---
+            "do_sample": True,
+            "temperature": 0.8,          # 0.7–0.9 usually good
+            "top_p": 0.9,                # nucleus sampling
+            "top_k": 50,                 # cap the candidate set
+            # --- length & formatting ---
+            "max_new_tokens": 128,       # reduce if answers should be short
+            "return_full_text": True,   # original input prompt concatenated with the newly generated text.
+            # --- repetition controls ---
+            "repetition_penalty": 1.15,  # 1.05–1.25; higher = stronger penalty
+            "no_repeat_ngram_size": 4,   # prevents exact n-gram repeats
+            "renormalize_logits": True,  # keeps logits sane after penalties
         }
+
         if self.generation_kwargs:
             base_kwargs.update(dict(self.generation_kwargs))
         self._generation_kwargs = dict(base_kwargs)
