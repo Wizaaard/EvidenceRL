@@ -9,8 +9,8 @@ steps:
    curated medical knowledge base.
 2. **Generate an answer** with a Hugging Face language model that is prompted
    with the retrieved evidence.
-3. **Align evidence post-generation** by comparing the generated answer with the
-   retrieved passages to identify which ones were actually used.
+3. **Align evidence post-generation** by querying the entire knowledge base with
+   the generated answer to identify which passages it most closely mirrors.
 4. **Compute a reward** by combining overlap in document identifiers with
    embedding similarity between the pre- and post-generation evidence sets.
    Scores are scaled into the [-1, 1] range where -1 indicates conflicting
@@ -39,11 +39,22 @@ python main.py --plot-dir plots --json-output runs/
 ```
 
 The first run downloads the default `sshleifer/tiny-gpt2` checkpoint used for
-answer generation and the lightweight judge model.  The demo iterates over a
-handful of synthetic obstetrics questions, printing the ground truth, retrieved
-and inferred evidence, alignment score, LLM-judged correctness, and reward.  If
-`--plot-dir` is supplied, two scatter plots are written to disk showing reward
-vs. correctness and alignment vs. correctness across the batch.
+answer generation and the lightweight judge model.  The demo iterates over an
+expanded set of synthetic obstetrics questions—including decoy passages meant to
+confuse retrieval—printing the ground truth, retrieved and inferred evidence,
+alignment score, LLM-judged correctness, and reward.  If `--plot-dir` is
+supplied, two scatter plots are written to disk showing reward vs. correctness
+and alignment vs. correctness across the batch.
+
+Because the generated answer is re-retrieved against the full corpus, the sample
+run demonstrates all reward regimes:
+
+* **Positive rewards** when correct answers stick to the initial evidence.
+* **Zero rewards** when the judge flags an incorrect answer and the alignment
+  score is suppressed.
+* **Negative rewards** when a correct answer leans on evidence that was not part
+  of the original retrieval set, indicating a mismatch between retrieval and
+  usage.
 
 If CUDA devices are available, both the generator and the judge automatically
 run on GPU.  A single GPU loads the model onto `cuda:0`, while multi-GPU setups
@@ -53,9 +64,9 @@ GPUs without extra configuration.
 Supplying `--json-output` writes detailed intermediate artifacts for each case
 into the provided directory (for example `runs/case_01.json`) and produces an
 aggregated `results.json` summary that includes prompts, retrieved evidence, the
-generated answer, correctness flags, and reward values.  Passing a filename such
-as `--json-output results.json` skips the per-case files and only writes the
-summary payload.
+generated answer, judge verdict (`"correct"`/`"incorrect"`), correctness flags,
+and reward values.  Passing a filename such as `--json-output results.json`
+skips the per-case files and only writes the summary payload.
 
 ## Running Tests
 

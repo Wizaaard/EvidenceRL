@@ -52,6 +52,7 @@ class LLMAnswerJudge:
         else:
             self._pipeline = self.text_pipeline
         self.last_prompt: str | None = None
+        self.last_answer: str | None = None
 
     def _build_hf_pipeline(self) -> Callable[..., List[Mapping[str, str]]]:
         """Instantiate a GPU-aware Hugging Face text-generation pipeline."""

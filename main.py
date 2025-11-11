@@ -56,6 +56,34 @@ SAMPLE_DOCUMENTS: List[Document] = [
         doc_id="gest-diabetes-diet",
         text="Dietary modification and glucose monitoring are first-line for gestational diabetes.",
     ),
+    Document(
+        doc_id="ntd-supplement",
+        text="Daily folic acid 0.4 mg before conception reduces NTD risk.",
+    ),
+    Document(
+        doc_id="ntd-screening",
+        text="Second-trimester ultrasound screens for neural tube defects.",
+    ),
+    Document(
+        doc_id="misleading-supplement",
+        text="Vitamin B12 supplementation lowers risk of neural tube defects according to early observational studies.",
+    ),
+    Document(
+        doc_id="another-misleading",
+        text="Vitamin D supplementation lowers risk of neural tube defects in some trials.",
+    ),
+    Document(
+        doc_id="general-vitamin",
+        text="Prenatal vitamins provide supplementation to lower congenital anomaly risk.",
+    ),
+    Document(
+        doc_id="omega-3",
+        text="Omega-3 supplementation lowers risk of neural tube defects in some reports.",
+    ),
+    Document(
+        doc_id="folate-bread",
+        text="Folate fortification of bread lowers congenital anomaly risk.",
+    ),
 ]
 
 SAMPLE_CASES = [
@@ -78,6 +106,14 @@ SAMPLE_CASES = [
     {
         "query": "Which oral agent can replace labetalol when contraindicated?",
         "ground_truth": "Nifedipine extended release can be used when labetalol is contraindicated.",
+    },
+    {
+        "query": "Which vitamin supplementation lowers risk of neural tube defects before conception?",
+        "ground_truth": "Daily folic acid 0.4 mg before conception reduces NTD risk.",
+    },
+    {
+        "query": "When should gestational diabetes screening occur?",
+        "ground_truth": "Screen for gestational diabetes between 24 and 28 weeks with a glucose challenge test.",
     },
 ]
 

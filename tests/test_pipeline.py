@@ -44,6 +44,42 @@ SYNTHETIC_DOCUMENTS: List[Document] = [
         doc_id="proteinuria",
         text="Proteinuria above 300 mg in 24 hours fulfills diagnostic criteria for preeclampsia.",
     ),
+    Document(
+        doc_id="gest-diabetes",
+        text="Screen for gestational diabetes between 24 and 28 weeks with a glucose challenge test.",
+    ),
+    Document(
+        doc_id="gest-diabetes-diet",
+        text="Dietary modification and glucose monitoring are first-line for gestational diabetes.",
+    ),
+    Document(
+        doc_id="ntd-supplement",
+        text="Daily folic acid 0.4 mg before conception reduces NTD risk.",
+    ),
+    Document(
+        doc_id="ntd-screening",
+        text="Second-trimester ultrasound screens for neural tube defects.",
+    ),
+    Document(
+        doc_id="misleading-supplement",
+        text="Vitamin B12 supplementation lowers risk of neural tube defects according to early observational studies.",
+    ),
+    Document(
+        doc_id="another-misleading",
+        text="Vitamin D supplementation lowers risk of neural tube defects in some trials.",
+    ),
+    Document(
+        doc_id="general-vitamin",
+        text="Prenatal vitamins provide supplementation to lower congenital anomaly risk.",
+    ),
+    Document(
+        doc_id="omega-3",
+        text="Omega-3 supplementation lowers risk of neural tube defects in some reports.",
+    ),
+    Document(
+        doc_id="folate-bread",
+        text="Folate fortification of bread lowers congenital anomaly risk.",
+    ),
 ]
 
 
@@ -63,6 +99,7 @@ class ScriptedJudge:
         self.verdicts = verdicts
         self.calls: List[tuple[str, str, str]] = []
         self.last_prompt = None
+        self.last_answer = None
 
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
         self.calls.append((query, answer, ground_truth))
@@ -117,6 +154,12 @@ def test_pipeline_multiple_queries_handles_mixed_correctness():
             "ground_truth": "Labetalol is recommended as a first-line oral agent for chronic hypertension in pregnancy.",
             "correct": False,
         },
+        {
+            "query": "Which vitamin supplementation lowers risk of neural tube defects before conception?",
+            "answer": "Daily folic acid 0.4 mg before conception reduces NTD risk.",
+            "ground_truth": "Daily folic acid 0.4 mg before conception reduces NTD risk.",
+            "correct": True,
+        },
     ]
 
     generator = ScriptedGenerator({case["query"]: case["answer"] for case in cases})
@@ -130,15 +173,20 @@ def test_pipeline_multiple_queries_handles_mixed_correctness():
     )
 
     rewards = []
+    alignment_scores = []
     correctness_flags = []
     for case in cases:
         result = pipeline.run(case["query"], ground_truth=case["ground_truth"])
         rewards.append(result.reward)
+        alignment_scores.append(result.alignment_score)
         correctness_flags.append(result.is_correct)
 
     assert any(flag is True for flag in correctness_flags)
     assert any(flag is False for flag in correctness_flags)
-    assert any(score == 0.0 for score in rewards)
+    assert any(abs(score) < 1e-9 for score in rewards)
+    assert any(score > 0 for score in rewards)
+    assert any(score < 0 for score in rewards)
+    assert any(score < 0 for score in alignment_scores)
 
 
 def test_pipeline_can_persist_results(tmp_path):
@@ -165,7 +213,7 @@ def test_pipeline_can_persist_results(tmp_path):
     assert payload["ground_truth"] == ground_truth
     assert payload["generated_answer"] == result.generated_answer
     assert payload["generator_prompt"] == result.generator_prompt == f"prompt::{query}"
-    assert payload["judge_prompt"] == result.judge_prompt == f"judge::{query}::{result.generated_answer}"
+    assert payload["judge_answer"] == result.judge_answer == "correct"
     assert isinstance(payload["pre_evidence"], list) and payload["pre_evidence"]
     assert isinstance(payload["post_evidence"], list) and payload["post_evidence"]
 
@@ -324,6 +372,7 @@ def test_llm_answer_judge_prompt_and_parsing():
     assert captured["kwargs"]["return_full_text"] is True
     assert captured["kwargs"]["do_sample"] is False
     assert verdict is True
+    assert judge.last_answer == "true."
 
 
 def test_llm_answer_judge_gpu_behaviour_matches_generator(monkeypatch):

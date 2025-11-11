@@ -28,7 +28,7 @@ class RagRlResult:
     is_correct: bool | None = None
     generator_prompt: str | None = None
     ground_truth: str | None = None
-    judge_prompt: str | None = None
+    judge_answer: str | None = None
 
     @staticmethod
     def _serialize_evidence(items: Iterable[RetrievedDocument]) -> List[dict[str, object]]:
@@ -55,7 +55,7 @@ class RagRlResult:
             "alignment_score": float(self.alignment_score),
             "reward": float(self.reward),
             "is_correct": self.is_correct,
-            "judge_prompt": self.judge_prompt,
+            "judge_answer": self.judge_answer,
         }
 
     def save_json(self, path: str | Path) -> None:
@@ -123,16 +123,16 @@ class RagRlPipeline:
 
         pre_evidence = self.retriever.retrieve(query, top_k=self.top_k)
         generated_answer = self.generator.generate(query, pre_evidence)
-        post_evidence = self.aligner.align(generated_answer, pre_evidence, top_k=self.top_k)
+        post_evidence = self.aligner.align(generated_answer, None, top_k=self.top_k)
         alignment_score = combined_reward(self.store, pre_evidence, post_evidence)
 
         is_correct: bool | None = None
         reward = alignment_score
-        judge_prompt: str | None = None
+        judge_answer: str | None = None
         if ground_truth is not None:
             is_correct = self.judge.is_correct(query, generated_answer, ground_truth)
             reward = alignment_score * (1.0 if is_correct else 0.0)
-            judge_prompt = getattr(self.judge, "last_prompt", None)
+            judge_answer = getattr(self.judge, "last_answer", None)
 
         generator_prompt = getattr(self.generator, "last_prompt", None)
 
@@ -146,7 +146,7 @@ class RagRlPipeline:
             is_correct,
             generator_prompt=generator_prompt,
             ground_truth=ground_truth,
-            judge_prompt=judge_prompt,
+            judge_answer=judge_answer,
         )
 
         if save_path is not None:
