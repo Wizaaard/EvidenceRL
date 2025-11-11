@@ -99,16 +99,28 @@ class LLMAnswerJudge:
             **pipeline_kwargs,
         )
 
+    # def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
+    #     return (
+    #         "You are an impartial medical examiner that verifies answers.\n"
+    #         "Compare the candidate answer with the gold standard and reply with\n"
+    #         "only 'correct' or 'incorrect'.\n\n"
+    #         f"Question: {query}\n"
+    #         f"Gold standard answer: {ground_truth}\n"
+    #         f"Candidate answer: {answer}\n\n"
+    #         "Verdict:"
+    #     )
     def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
         return (
-            "You are an impartial medical examiner that verifies answers.\n"
-            "Compare the candidate answer with the gold standard and reply with\n"
-            "only 'correct' or 'incorrect'.\n\n"
+            "You are an impartial evaluator tasked with judging the equivalence of two answers.\n"
+            "Compare the candidate answer with the ground truth and decide if they convey the same meaning.\n"
+            "Respond only with 'True' if the candidate answer is semantically equivalent to the ground truth, "
+            "or 'False' otherwise.\n\n"
             f"Question: {query}\n"
-            f"Gold standard answer: {ground_truth}\n"
+            f"Ground truth: {ground_truth}\n"
             f"Candidate answer: {answer}\n\n"
             "Verdict:"
         )
+
 
     @staticmethod
     def _extract_verdict(outputs: Iterable[Mapping[str, str]], prompt: str) -> str:
@@ -120,12 +132,19 @@ class LLMAnswerJudge:
             return text.strip().lower()
         return ""
 
+    # def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
+    #     prompt = self._build_prompt(query, answer, ground_truth)
+    #     self.last_prompt = prompt
+    #     outputs = self._pipeline(prompt, **self._generation_kwargs)
+    #     verdict = self._extract_verdict(outputs, prompt)
+    #     return verdict.startswith("correct")
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
         prompt = self._build_prompt(query, answer, ground_truth)
         self.last_prompt = prompt
         outputs = self._pipeline(prompt, **self._generation_kwargs)
-        verdict = self._extract_verdict(outputs, prompt)
-        return verdict.startswith("correct")
+        verdict = self._extract_verdict(outputs, prompt).strip().lower()
+        return verdict.startswith("true")
+
 
 
 __all__ = ["AnswerJudge", "LLMAnswerJudge"]
