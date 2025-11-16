@@ -11,7 +11,7 @@ from .alignment import EvidenceAligner
 from .documents import Document, RetrievedDocument
 from .evaluation import AnswerJudge, LLMAnswerJudge
 from .generation import DEFAULT_MODEL_NAME, EvidenceGenerator, HuggingFaceGenerator
-from .retrieval import DocumentStore, TfidfRetriever
+from .retrieval import DocumentStore, HuggingFaceEmbedder, SemanticRetriever
 from .reward import combined_reward
 
 
@@ -86,6 +86,10 @@ class RagRlPipeline:
         answer_judge: AnswerJudge | None = None,
         judge_model_name: str | None = None,
         judge_kwargs: dict | None = None,
+        embedder: HuggingFaceEmbedder | None = None,
+        embedding_model_name: str | None = None,
+        chunk_size: int = 320,
+        chunk_overlap: int = 64,
     ) -> None:
         if top_k <= 0:
             raise ValueError("top_k must be positive")
@@ -100,8 +104,14 @@ class RagRlPipeline:
                 "Provide either an answer judge instance or model configuration, not both."
             )
 
-        self.store = DocumentStore(documents)
-        self.retriever = TfidfRetriever(self.store)
+        embedder = embedder or HuggingFaceEmbedder(model_name=embedding_model_name or "sentence-transformers/all-MiniLM-L6-v2")
+        self.store = DocumentStore(
+            documents,
+            embedder=embedder,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        self.retriever = SemanticRetriever(self.store)
         if generator is not None:
             self.generator = generator
         else:

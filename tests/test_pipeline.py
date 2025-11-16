@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from evidence_rl import Document, RagRlPipeline
+from evidence_rl import Document, RagRlPipeline, load_cardiac_icd_documents
 from evidence_rl.evaluation import LLMAnswerJudge
 from evidence_rl.generation import HuggingFaceGenerator
-from evidence_rl.retrieval import DocumentStore, TfidfRetriever
+from evidence_rl.retrieval import DocumentStore, SemanticRetriever
 
 
 SYNTHETIC_DOCUMENTS: List[Document] = [
@@ -101,6 +101,17 @@ SYNTHETIC_DOCUMENTS: List[Document] = [
 ]
 
 
+class FakeEmbedder:
+    def encode(self, texts: Iterable[str]) -> List[List[float]]:
+        vectors = []
+        for text in texts:
+            tokens = text.lower().split()
+            length = len(tokens)
+            coverage = sum(len(token) for token in tokens)
+            vectors.append([float(length), float(coverage)])
+        return vectors
+
+
 class ScriptedGenerator:
     def __init__(self, responses: Dict[str, str]):
         self.responses = responses
@@ -126,6 +137,25 @@ class ScriptedJudge:
         return self.verdicts[query]
 
 
+def test_load_cardiac_icd_documents(tmp_path):
+    csv_content = """subject_id,hadm_id,seq_num,icd_code,long_title
+1,10,1,I20.0,Unstable angina
+1,10,2,4109,Acute myocardial infarction
+2,20,1,I50.1,Left ventricular failure
+3,30,1,E11.9,Type 2 diabetes without complications
+"""
+    (tmp_path / "heart_diagnoses_all_true.csv").write_text(csv_content, encoding="utf-8")
+
+    docs = load_cardiac_icd_documents(tmp_path, icd_prefixes=["I20", "410", "I50"])
+
+    ids = {doc.doc_id for doc in docs}
+    assert ids == {"icd-i20", "icd-410", "icd-i50"}
+    for doc in docs:
+        assert "cardiac" in doc.metadata["concepts"]
+        assert doc.metadata["example_titles"]
+        assert doc.metadata["icd_codes"]
+
+
 def test_pipeline_runs_with_llm_judge_hook():
     query = "What is the recommended first-line therapy for chronic hypertension in pregnancy?"
     ground_truth = "First-line therapy for chronic hypertension in pregnancy is labetalol."
@@ -140,6 +170,7 @@ def test_pipeline_runs_with_llm_judge_hook():
         top_k=3,
         generator=generator,
         answer_judge=judge,
+        embedder=FakeEmbedder(),
     )
     result = pipeline.run(query, ground_truth=ground_truth)
 
@@ -189,6 +220,7 @@ def test_pipeline_multiple_queries_handles_mixed_correctness():
         top_k=3,
         generator=generator,
         answer_judge=judge,
+        embedder=FakeEmbedder(),
     )
 
     rewards = []
@@ -220,6 +252,7 @@ def test_pipeline_can_persist_results(tmp_path):
         top_k=2,
         generator=generator,
         answer_judge=judge,
+        embedder=FakeEmbedder(),
     )
 
     output_path = tmp_path / "result.json"
@@ -252,6 +285,7 @@ def test_huggingface_generator_builds_prompt():
         top_k=2,
         generator=generator,
         answer_judge=ScriptedJudge({}),
+        embedder=FakeEmbedder(),
     ).retriever.retrieve("question", top_k=2)
 
     answer = generator.generate("question", retrieved)
@@ -391,7 +425,7 @@ def test_llm_answer_judge_prompt_and_parsing():
     assert captured["kwargs"]["return_full_text"] is True
     assert captured["kwargs"]["do_sample"] is False
     assert verdict is True
-    assert judge.last_answer == "true."
+    assert judge.last_answer == "correct."
 
 
 def test_llm_answer_judge_gpu_behaviour_matches_generator(monkeypatch):
@@ -464,8 +498,8 @@ def test_retriever_respects_concept_overlap_constraint():
         Document("c", "General prenatal counseling."),
     ]
 
-    store = DocumentStore(docs)
-    retriever = TfidfRetriever(store)
+    store = DocumentStore(docs, embedder=FakeEmbedder())
+    retriever = SemanticRetriever(store)
 
     htn_results = retriever.retrieve("hypertension management", top_k=5)
     assert any(item.document.doc_id == "a" for item in htn_results)

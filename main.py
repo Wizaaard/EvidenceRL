@@ -13,130 +13,121 @@ SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from evidence_rl import Document, RagRlPipeline, RagRlResult  # noqa: E402
+from evidence_rl import Document, RagRlPipeline, RagRlResult, load_cardiac_icd_documents  # noqa: E402
 
-SAMPLE_DOCUMENTS: List[Document] = [
+CARDIAC_DOCUMENTS: List[Document] = [
     Document(
-        doc_id="htn-overview",
-        text="Chronic hypertension complicates roughly one to two percent of pregnancies.",
-        metadata={"concepts": {"hypertension", "pregnancy"}},
+        doc_id="icd-i20-i25",
+        text=(
+            "Ischemic heart disease (ICD I20-I25) includes stable angina, unstable angina, and acute myocardial "
+            "infarction. Chest pressure radiating to the left arm that improves with nitroglycerin suggests angina."
+            " ST-elevation myocardial infarction requires immediate reperfusion therapy and antiplatelet agents."
+        ),
+        metadata={"concepts": {"ischemic heart disease", "angina", "stemi", "icd i20-i25"}},
     ),
     Document(
-        doc_id="htn-therapy",
-        text="Labetalol is recommended as a first-line oral agent for chronic hypertension in pregnancy.",
-        metadata={"concepts": {"hypertension", "pregnancy", "labetalol"}},
+        doc_id="icd-i21-stemi-care",
+        text=(
+            "For STEMI cases, administer aspirin, load a P2Y12 inhibitor, and arrange emergent catheterization. "
+            "Elevated troponin with ST elevations and reciprocal depressions indicate transmural ischemia."
+        ),
+        metadata={"concepts": {"stemi", "aspirin", "p2y12", "cath", "icd i21"}},
     ),
     Document(
-        doc_id="htn-dosing",
-        text="Initial labetalol dosing is commonly 100 mg twice daily with titration as needed.",
-        metadata={"concepts": {"hypertension", "labetalol"}},
+        doc_id="icd-i50-heart-failure",
+        text=(
+            "Heart failure syndromes (ICD I50) present with dyspnea, orthopnea, elevated BNP, and pulmonary edema. "
+            "Guideline-directed therapy includes ACE inhibitors, beta blockers, and diuretics for volume overload."
+        ),
+        metadata={"concepts": {"heart failure", "ace inhibitor", "beta blocker", "diuretic", "icd i50"}},
     ),
     Document(
-        doc_id="htn-alt",
-        text="Nifedipine extended release can be used when labetalol is contraindicated.",
-        metadata={"concepts": {"hypertension", "nifedipine", "pregnancy"}},
+        doc_id="icd-i47-arrhythmia",
+        text=(
+            "Arrhythmias (ICD I47) such as ventricular tachycardia cause palpitations and syncope. "
+            "Unstable VT requires immediate synchronized cardioversion while stable VT can receive amiodarone."
+        ),
+        metadata={"concepts": {"ventricular tachycardia", "amiodarone", "cardioversion", "icd i47"}},
     ),
     Document(
-        doc_id="htn-severe",
-        text="Severe hypertension with end-organ symptoms warrants intravenous therapy.",
-        metadata={"concepts": {"hypertension", "severe hypertension"}},
+        doc_id="icd-i30-pericarditis",
+        text=(
+            "Acute pericarditis (ICD I30) presents with sharp pleuritic chest pain improved by sitting forward. "
+            "Diffuse ST elevations with PR depressions on ECG and a pericardial friction rub support the diagnosis."
+        ),
+        metadata={"concepts": {"pericarditis", "friction rub", "st elevation", "icd i30"}},
     ),
     Document(
-        doc_id="preeclampsia-ppx",
-        text="Low-dose aspirin beginning in the late first trimester reduces preeclampsia risk.",
-        metadata={"concepts": {"preeclampsia", "aspirin"}},
+        doc_id="icd-i25-complication",
+        text=(
+            "Post-myocardial infarction mechanical complications include papillary muscle rupture causing acute "
+            "severe mitral regurgitation and heart failure. New holosystolic murmur with pulmonary edema warrants "
+            "urgent surgical consultation."
+        ),
+        metadata={"concepts": {"papillary muscle rupture", "mitral regurgitation", "heart failure", "icd i25"}},
     ),
     Document(
-        doc_id="preeclampsia-signs",
-        text="Persistent headache, visual changes, and right upper quadrant pain suggest preeclampsia.",
-        metadata={"concepts": {"preeclampsia", "headache", "visual changes"}},
+        doc_id="icd-i42-cardiomyopathy",
+        text=(
+            "Dilated cardiomyopathy (ICD I42) leads to reduced ejection fraction and ventricular dilation. "
+            "Alcohol excess, viral myocarditis, and genetic mutations are common causes; treat with standard HF "
+            "therapy and consider ICD placement when EF remains low."
+        ),
+        metadata={"concepts": {"cardiomyopathy", "heart failure", "icd i42"}},
     ),
     Document(
-        doc_id="proteinuria",
-        text="Proteinuria above 300 mg in 24 hours fulfills diagnostic criteria for preeclampsia.",
-        metadata={"concepts": {"preeclampsia", "proteinuria"}},
-    ),
-    Document(
-        doc_id="gest-diabetes",
-        text="Screen for gestational diabetes between 24 and 28 weeks with a glucose challenge test.",
-        metadata={"concepts": {"gestational diabetes", "glucose challenge"}},
-    ),
-    Document(
-        doc_id="gest-diabetes-diet",
-        text="Dietary modification and glucose monitoring are first-line for gestational diabetes.",
-        metadata={"concepts": {"gestational diabetes", "dietary modification"}},
-    ),
-    Document(
-        doc_id="ntd-supplement",
-        text="Daily folic acid 0.4 mg before conception reduces NTD risk.",
-        metadata={"concepts": {"neural tube defects", "folic acid"}},
-    ),
-    Document(
-        doc_id="ntd-screening",
-        text="Second-trimester ultrasound screens for neural tube defects.",
-        metadata={"concepts": {"neural tube defects", "ultrasound"}},
-    ),
-    Document(
-        doc_id="misleading-supplement",
-        text="Vitamin B12 supplementation lowers risk of neural tube defects according to early observational studies.",
-        metadata={"concepts": {"neural tube defects", "vitamin b12"}},
-    ),
-    Document(
-        doc_id="another-misleading",
-        text="Vitamin D supplementation lowers risk of neural tube defects in some trials.",
-        metadata={"concepts": {"neural tube defects", "vitamin d"}},
-    ),
-    Document(
-        doc_id="general-vitamin",
-        text="Prenatal vitamins provide supplementation to lower congenital anomaly risk.",
-        metadata={"concepts": {"prenatal vitamins", "congenital anomalies"}},
-    ),
-    Document(
-        doc_id="omega-3",
-        text="Omega-3 supplementation lowers risk of neural tube defects in some reports.",
-        metadata={"concepts": {"neural tube defects", "omega-3"}},
-    ),
-    Document(
-        doc_id="folate-bread",
-        text="Folate fortification of bread lowers congenital anomaly risk.",
-        metadata={"concepts": {"folate", "congenital anomalies"}},
+        doc_id="icd-i48-atrial-fibrillation",
+        text=(
+            "Atrial fibrillation (ICD I48) presents with irregularly irregular rhythm and absent P waves. "
+            "Rate control with beta blockers or calcium channel blockers and anticoagulation guided by CHA2DS2-VASc "
+            "score reduce stroke risk."
+        ),
+        metadata={"concepts": {"atrial fibrillation", "anticoagulation", "beta blocker", "icd i48"}},
     ),
 ]
 
 SAMPLE_CASES = [
     {
-        "query": "What medication is first-line for treating chronic hypertension during pregnancy?",
-        "ground_truth": "Labetalol is recommended as a first-line oral agent for chronic hypertension in pregnancy.",
+        "query": "A patient with crushing chest pain and ST elevations should receive which immediate therapy?",
+        "ground_truth": "Administer aspirin, load a P2Y12 inhibitor, and send the patient for emergent catheterization.",
     },
     {
-        "query": "Which medication prevents preeclampsia in high-risk pregnancies?",
-        "ground_truth": "Low-dose aspirin beginning in the late first trimester reduces preeclampsia risk.",
+        "query": "How do we manage acute decompensated heart failure with pulmonary edema?",
+        "ground_truth": "Use IV diuretics along with guideline-directed medical therapy for heart failure.",
     },
     {
-        "query": "What symptoms raise suspicion for preeclampsia?",
-        "ground_truth": "Persistent headache, visual changes, and right upper quadrant pain suggest preeclampsia.",
+        "query": "Irregularly irregular rhythm without P waves suggests what diagnosis and initial management?",
+        "ground_truth": "Atrial fibrillation managed with rate control and anticoagulation guided by CHA2DS2-VASc.",
     },
     {
-        "query": "How is gestational diabetes initially managed?",
-        "ground_truth": "Dietary modification and glucose monitoring are first-line for gestational diabetes.",
+        "query": "Sharp chest pain relieved by leaning forward with diffuse ST elevations indicates which ICD chapter?",
+        "ground_truth": "Acute pericarditis in ICD I30 should be considered.",
     },
     {
-        "query": "Which oral agent can replace labetalol when contraindicated?",
-        "ground_truth": "Nifedipine extended release can be used when labetalol is contraindicated.",
+        "query": "What rhythm problem causes syncope and may need amiodarone when stable?",
+        "ground_truth": "Ventricular tachycardia can cause syncope and stable cases can receive amiodarone.",
     },
     {
-        "query": "Which vitamin supplementation lowers risk of neural tube defects before conception?",
-        "ground_truth": "Daily folic acid 0.4 mg before conception reduces NTD risk.",
+        "query": "Which ICD block covers stable angina and myocardial infarction?",
+        "ground_truth": "ICD I20-I25 describes ischemic heart disease including angina and MI.",
     },
     {
-        "query": "When should gestational diabetes screening occur?",
-        "ground_truth": "Screen for gestational diabetes between 24 and 28 weeks with a glucose challenge test.",
+        "query": "What complication should be suspected after MI with acute severe mitral regurgitation?",
+        "ground_truth": "Papillary muscle rupture leading to heart failure is a post-MI complication.",
     },
 ]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the EvidenceRL demo pipeline")
+    parser.add_argument(
+        "--data-path",
+        default=None,
+        help=(
+            "Optional path to the MIMIC-IV-Ext cardiac dataset directory. When provided, the demo "
+            "uses real ICD diagnosis chapters from the CSVs instead of the built-in toy corpus."
+        ),
+    )
     parser.add_argument(
         "--model-name",
         default=None,
@@ -151,6 +142,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Optional Hugging Face model identifier for the LLM answer judge. "
             "Defaults to the same checkpoint as the generator."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-model-name",
+        default=None,
+        help=(
+            "Optional Hugging Face model identifier for dense retrieval embeddings. "
+            "Defaults to sentence-transformers/all-MiniLM-L6-v2."
         ),
     )
     parser.add_argument(
@@ -256,12 +255,19 @@ def plot_distributions(results: Iterable[RagRlResult], output_dir: Path | str) -
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
+    documents: List[Document]
+    if args.data_path:
+        documents = load_cardiac_icd_documents(args.data_path)
+    else:
+        documents = CARDIAC_DOCUMENTS
+
     try:
         pipeline = RagRlPipeline(
-            SAMPLE_DOCUMENTS,
+            documents,
             top_k=3,
             model_name=args.model_name,
             judge_model_name=args.judge_model_name,
+            embedding_model_name=args.embedding_model_name,
         )
     except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
         if exc.name == "transformers":
