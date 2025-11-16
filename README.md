@@ -5,8 +5,11 @@ generation (RAG) with a reward signal that measures how closely the generated
 answer aligns with the retrieved evidence.  The pipeline performs the following
 steps:
 
-1. **Retrieve evidence** using a lightweight TF-IDF retriever built over a
-   curated medical knowledge base.
+1. **Retrieve evidence** using a lightweight TF-IDF retriever that applies a
+   concept-constrained similarity rule over a curated medical knowledge base.
+   A document is only eligible when its tagged medical concepts overlap with
+   the query, mirroring the expertise-aware retrieval described in recent RAG
+   literature.
 2. **Generate an answer** with a Hugging Face language model that is prompted
    with the retrieved evidence.
 3. **Align evidence post-generation** by querying the entire knowledge base with

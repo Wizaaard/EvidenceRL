@@ -9,76 +9,94 @@ from typing import Dict, Iterable, List
 from evidence_rl import Document, RagRlPipeline
 from evidence_rl.evaluation import LLMAnswerJudge
 from evidence_rl.generation import HuggingFaceGenerator
+from evidence_rl.retrieval import DocumentStore, TfidfRetriever
 
 
 SYNTHETIC_DOCUMENTS: List[Document] = [
     Document(
         doc_id="htn-overview",
         text="Chronic hypertension complicates roughly one to two percent of pregnancies.",
+        metadata={"concepts": {"hypertension", "pregnancy"}},
     ),
     Document(
         doc_id="htn-therapy",
         text="Labetalol is recommended as a first-line oral agent for chronic hypertension in pregnancy.",
+        metadata={"concepts": {"hypertension", "pregnancy", "labetalol"}},
     ),
     Document(
         doc_id="htn-dosing",
         text="Initial labetalol dosing is commonly 100 mg twice daily with titration as needed.",
+        metadata={"concepts": {"hypertension", "labetalol"}},
     ),
     Document(
         doc_id="htn-alt",
         text="Nifedipine extended release can be used when labetalol is contraindicated.",
+        metadata={"concepts": {"hypertension", "nifedipine", "pregnancy"}},
     ),
     Document(
         doc_id="htn-severe",
         text="Severe hypertension with end-organ symptoms warrants intravenous therapy.",
+        metadata={"concepts": {"hypertension", "severe hypertension"}},
     ),
     Document(
         doc_id="preeclampsia-ppx",
         text="Low-dose aspirin beginning in the late first trimester reduces preeclampsia risk.",
+        metadata={"concepts": {"preeclampsia", "aspirin"}},
     ),
     Document(
         doc_id="preeclampsia-signs",
         text="Persistent headache, visual changes, and right upper quadrant pain suggest preeclampsia.",
+        metadata={"concepts": {"preeclampsia", "headache", "visual changes"}},
     ),
     Document(
         doc_id="proteinuria",
         text="Proteinuria above 300 mg in 24 hours fulfills diagnostic criteria for preeclampsia.",
+        metadata={"concepts": {"preeclampsia", "proteinuria"}},
     ),
     Document(
         doc_id="gest-diabetes",
         text="Screen for gestational diabetes between 24 and 28 weeks with a glucose challenge test.",
+        metadata={"concepts": {"gestational diabetes", "glucose challenge"}},
     ),
     Document(
         doc_id="gest-diabetes-diet",
         text="Dietary modification and glucose monitoring are first-line for gestational diabetes.",
+        metadata={"concepts": {"gestational diabetes", "dietary modification"}},
     ),
     Document(
         doc_id="ntd-supplement",
         text="Daily folic acid 0.4 mg before conception reduces NTD risk.",
+        metadata={"concepts": {"neural tube defects", "folic acid"}},
     ),
     Document(
         doc_id="ntd-screening",
         text="Second-trimester ultrasound screens for neural tube defects.",
+        metadata={"concepts": {"neural tube defects", "ultrasound"}},
     ),
     Document(
         doc_id="misleading-supplement",
         text="Vitamin B12 supplementation lowers risk of neural tube defects according to early observational studies.",
+        metadata={"concepts": {"neural tube defects", "vitamin b12"}},
     ),
     Document(
         doc_id="another-misleading",
         text="Vitamin D supplementation lowers risk of neural tube defects in some trials.",
+        metadata={"concepts": {"neural tube defects", "vitamin d"}},
     ),
     Document(
         doc_id="general-vitamin",
         text="Prenatal vitamins provide supplementation to lower congenital anomaly risk.",
+        metadata={"concepts": {"prenatal vitamins", "congenital anomalies"}},
     ),
     Document(
         doc_id="omega-3",
         text="Omega-3 supplementation lowers risk of neural tube defects in some reports.",
+        metadata={"concepts": {"neural tube defects", "omega-3"}},
     ),
     Document(
         doc_id="folate-bread",
         text="Folate fortification of bread lowers congenital anomaly risk.",
+        metadata={"concepts": {"folate", "congenital anomalies"}},
     ),
 ]
 
@@ -104,6 +122,7 @@ class ScriptedJudge:
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
         self.calls.append((query, answer, ground_truth))
         self.last_prompt = f"judge::{query}::{answer}"
+        self.last_answer = "correct" if self.verdicts[query] else "incorrect"
         return self.verdicts[query]
 
 
@@ -436,6 +455,28 @@ def test_llm_answer_judge_handles_incorrect():
 
     judge = LLMAnswerJudge(text_pipeline=fake_pipeline)
     assert judge.is_correct("q", "a", "g") is False
+
+
+def test_retriever_respects_concept_overlap_constraint():
+    docs = [
+        Document("a", "Hypertension guidance for pregnancy.", {"concepts": {"hypertension"}}),
+        Document("b", "Preeclampsia requires aspirin prophylaxis.", {"concepts": {"preeclampsia"}}),
+        Document("c", "General prenatal counseling."),
+    ]
+
+    store = DocumentStore(docs)
+    retriever = TfidfRetriever(store)
+
+    htn_results = retriever.retrieve("hypertension management", top_k=5)
+    assert any(item.document.doc_id == "a" for item in htn_results)
+    assert all("hypertension" in store.document_concepts(item.document.doc_id) for item in htn_results)
+
+    preeclampsia_results = retriever.retrieve("preeclampsia prevention", top_k=5)
+    assert any(item.document.doc_id == "b" for item in preeclampsia_results)
+    assert all(
+        "preeclampsia" in store.document_concepts(item.document.doc_id)
+        for item in preeclampsia_results
+    )
 
 
 def test_reward_distribution_plot(tmp_path, monkeypatch):

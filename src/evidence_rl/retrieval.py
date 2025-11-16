@@ -6,12 +6,18 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Set
 
 from .documents import Document, RetrievedDocument
 
 TokenVector = Dict[str, float]
 _WORD_RE = re.compile(r"\b\w+\b")
+
+
+def _normalize_concepts(concepts: Iterable[str] | None) -> Set[str]:
+    if not concepts:
+        return set()
+    return {concept.strip().lower() for concept in concepts if concept and concept.strip()}
 
 
 def _tokenize(text: str) -> List[str]:
@@ -84,11 +90,41 @@ class DocumentStore:
             _tfidf(counter, self._idf, self._default_idf) for counter in self._term_frequencies
         ]
         self._id_to_index = {doc.doc_id: idx for idx, doc in enumerate(self.documents)}
+        self._concepts_by_index: List[Set[str]] = [
+            _normalize_concepts(doc.metadata.get("concepts") if doc.metadata else None)
+            for doc in self.documents
+        ]
+        self._concept_vocabulary: Set[str] = set().union(*self._concepts_by_index)
+        self._has_concepts = any(self._concepts_by_index)
 
     def vectorize(self, text: str) -> TokenVector:
         tokens = _tokenize(text)
         counter = Counter(tokens)
         return _tfidf(counter, self._idf, self._default_idf)
+
+    def extract_concepts(self, text: str) -> Set[str]:
+        """Return the subset of known concepts mentioned in ``text``.
+
+        The detection is intentionally lightweight: if a concept string from the corpus
+        vocabulary appears as a substring in the lowercased text, it is included. When
+        no concepts are known, this returns an empty set without constraining retrieval.
+        """
+
+        if not self._concept_vocabulary:
+            return set()
+
+        lowered = text.lower()
+        return {concept for concept in self._concept_vocabulary if concept in lowered}
+
+    def document_concepts(self, doc_id: str) -> Set[str]:
+        if doc_id not in self._id_to_index:
+            raise KeyError(f"Unknown document id: {doc_id}")
+        return self._concepts_by_index[self._id_to_index[doc_id]]
+
+    def concepts_for_index(self, index: int) -> Set[str]:
+        if index < 0 or index >= len(self._concepts_by_index):
+            raise IndexError("Document index out of range")
+        return self._concepts_by_index[index]
 
     def get_document_vector(self, doc_id: str) -> TokenVector:
         if doc_id not in self._id_to_index:
@@ -116,8 +152,21 @@ class TfidfRetriever:
             raise ValueError("top_k must be positive")
 
         query_vector = self.store.vectorize(query)
-        scores = [cosine_similarity(query_vector, doc_vec) for doc_vec in self.store._doc_vectors]
-        ranked = sorted(enumerate(scores), key=lambda item: item[1], reverse=True)[:top_k]
+        query_concepts = self.store.extract_concepts(query)
+        scores: List[float] = []
+        for idx, doc_vec in enumerate(self.store._doc_vectors):
+            doc_concepts = self.store.concepts_for_index(idx)
+            if self.store._has_concepts and query_concepts:
+                if not doc_concepts or doc_concepts.isdisjoint(query_concepts):
+                    scores.append(float("-inf"))
+                    continue
+            scores.append(cosine_similarity(query_vector, doc_vec))
+
+        ranked = [item for item in enumerate(scores) if math.isfinite(item[1])]
+        if not ranked:
+            return []
+
+        ranked = sorted(ranked, key=lambda item: item[1], reverse=True)[:top_k]
         indices = [idx for idx, _ in ranked]
         top_scores = [float(score) for _, score in ranked]
         return self.store.as_retrieved(indices, top_scores)

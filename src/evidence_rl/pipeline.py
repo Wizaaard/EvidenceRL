@@ -32,15 +32,21 @@ class RagRlResult:
 
     @staticmethod
     def _serialize_evidence(items: Iterable[RetrievedDocument]) -> List[dict[str, object]]:
-        return [
-            {
-                "doc_id": item.document.doc_id,
-                "text": item.document.text,
-                "metadata": item.document.metadata,
-                "score": float(item.score),
-            }
-            for item in items
-        ]
+        serialized = []
+        for item in items:
+            metadata = item.document.metadata
+            if metadata and "concepts" in metadata and isinstance(metadata["concepts"], set):
+                metadata = dict(metadata)
+                metadata["concepts"] = sorted(metadata["concepts"])
+            serialized.append(
+                {
+                    "doc_id": item.document.doc_id,
+                    "text": item.document.text,
+                    "metadata": metadata,
+                    "score": float(item.score),
+                }
+            )
+        return serialized
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serialisable representation of the result."""
