@@ -5,6 +5,7 @@ from pathlib import Path
 
 from evidence_rl.baseline import (
     PromptingPredictor,
+    _judge_precision_recall_at_k,
     _parse_ranked_items,
     _precision_recall_at_k,
     _textualise_patient,
@@ -52,6 +53,30 @@ def test_parse_ranked_items_extracts_lists():
     assert procs == ["Cath lab", "Echo"]
 
 
+class StubJudge:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
+        self.calls.append((query, answer, ground_truth))
+        return answer.split()[0].lower() == ground_truth.split()[0].lower()
+
+
+def test_judge_precision_recall_at_k_uses_llm_judge():
+    judge = StubJudge()
+    precision, recall = _judge_precision_recall_at_k(
+        ["Acute myocardial infarction", "Heart failure"],
+        ["Acute MI", "Dilated cardiomyopathy"],
+        2,
+        judge=judge,
+        patient_context="hadm 1",
+        label="diagnosis",
+    )
+    assert precision == 0.5
+    assert recall == 0.5
+    assert judge.calls, "judge should be consulted"
+
+
 def test_prompting_predictor_end_to_end(tmp_path: Path):
     base = tmp_path
     (base / "heart_diagnoses.csv").write_text(
@@ -79,7 +104,8 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
             }
         ]
 
-    predictor = PromptingPredictor(text_pipeline=fake_pipeline)
+    judge = StubJudge()
+    predictor = PromptingPredictor(text_pipeline=fake_pipeline, answer_judge=judge)
     cases = load_patient_cases(base)
     prediction = predictor.predict(cases[0])
 
@@ -88,6 +114,7 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
     assert prediction.diagnoses_precision_at_k[2] == 1.0
     assert prediction.procedures_precision_at_k[2] == 1.0
     assert text_calls, "prompt should be sent to pipeline"
+    assert judge.calls, "judge should score the predictions"
 
     saved = tmp_path / "baseline.json"
     saved.write_text(json.dumps(prediction.to_dict()))

@@ -284,7 +284,10 @@ def main(argv: list[str] | None = None) -> None:
             print(str(exc))
             return
 
-        predictor = PromptingPredictor(model_name=args.model_name)
+        predictor = PromptingPredictor(
+            model_name=args.model_name,
+            judge_model_name=args.judge_model_name,
+        )
         predictions = [predictor.predict(case) for case in cases]
         summary = summarise_predictions(predictions)
 

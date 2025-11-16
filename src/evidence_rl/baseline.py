@@ -13,9 +13,10 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Mapping, MutableMapping
+from typing import Iterable, List, Mapping, MutableMapping, Sequence
 
 from .generation import DEFAULT_MODEL_NAME, PromptOnlyGenerator
+from .evaluation import LLMAnswerJudge, AnswerJudge
 
 
 _PATIENT_SECTIONS = (
@@ -85,6 +86,8 @@ def _parse_ranked_items(text: str, heading: str) -> List[str]:
 
 
 def _precision_recall_at_k(predicted: List[str], truth: List[str], k: int) -> tuple[float, float]:
+    """String-equality precision/recall at *k* (legacy helper)."""
+
     if k <= 0:
         raise ValueError("k must be positive")
     preds = predicted[:k]
@@ -94,6 +97,45 @@ def _precision_recall_at_k(predicted: List[str], truth: List[str], k: int) -> tu
     hits = sum(1 for item in preds if item.lower() in truth_set)
     precision = hits / len(preds)
     recall = hits / len(truth_set) if truth_set else 0.0
+    return precision, recall
+
+
+def _judge_precision_recall_at_k(
+    predicted: Sequence[str],
+    truth: Sequence[str],
+    k: int,
+    judge: AnswerJudge,
+    patient_context: str,
+    label: str,
+) -> tuple[float, float]:
+    """LLM-judged precision/recall at *k* for diagnoses or procedures."""
+
+    if k <= 0:
+        raise ValueError("k must be positive")
+    preds = list(predicted[:k])
+    remaining_truth = [item for item in truth if item]
+    if not preds:
+        return 0.0, 0.0
+    if not remaining_truth:
+        return 0.0, 0.0
+
+    hits = 0
+    used: set[int] = set()
+    for pred in preds:
+        for idx, truth_item in enumerate(remaining_truth):
+            if idx in used:
+                continue
+            query = (
+                f"Patient encounter:\n{patient_context}\n\n"
+                f"Does the candidate {label} match the gold standard {label}?"
+            )
+            if judge.is_correct(query=query, answer=pred, ground_truth=truth_item):
+                hits += 1
+                used.add(idx)
+                break
+
+    precision = hits / len(preds)
+    recall = hits / len(remaining_truth)
     return precision, recall
 
 
@@ -197,11 +239,20 @@ class PromptingPredictor:
         model_name: str | None = None,
         generation_kwargs: Mapping[str, object] | None = None,
         text_pipeline=None,
+        answer_judge: AnswerJudge | None = None,
+        judge_model_name: str | None = None,
+        judge_generation_kwargs: Mapping[str, object] | None = None,
+        judge_pipeline=None,
     ) -> None:
         self.generator = PromptOnlyGenerator(
             model_name=model_name or DEFAULT_MODEL_NAME,
             generation_kwargs=generation_kwargs,
             text_pipeline=text_pipeline,
+        )
+        self.judge: AnswerJudge = answer_judge or LLMAnswerJudge(
+            model_name=judge_model_name or model_name or DEFAULT_MODEL_NAME,
+            generation_kwargs=judge_generation_kwargs,
+            text_pipeline=judge_pipeline,
         )
 
     def _build_prompt(self, case: PatientCase) -> str:
@@ -227,10 +278,24 @@ class PromptingPredictor:
         proc_precision: dict[int, float] = {}
         proc_recall: dict[int, float] = {}
         for k in range(1, 6):
-            p, r = _precision_recall_at_k(predicted_diags, case.diagnoses, k)
+            p, r = _judge_precision_recall_at_k(
+                predicted_diags,
+                case.diagnoses,
+                k,
+                judge=self.judge,
+                patient_context=case.context,
+                label="diagnosis",
+            )
             diag_precision[k] = p
             diag_recall[k] = r
-            p2, r2 = _precision_recall_at_k(predicted_procs, case.procedures, k)
+            p2, r2 = _judge_precision_recall_at_k(
+                predicted_procs,
+                case.procedures,
+                k,
+                judge=self.judge,
+                patient_context=case.context,
+                label="procedure",
+            )
             proc_precision[k] = p2
             proc_recall[k] = r2
 

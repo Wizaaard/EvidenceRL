@@ -95,7 +95,9 @@ demo at the full MIMIC-IV-Ext cardiac directory using `--patient-data-path`.
 The tool will textualise each patient note from `heart_diagnoses.csv`, prompt an
 LLM for the top 5 diagnoses and procedures, and compute precision/recall at
 cut-offs 1–5 against the labels in `heart_diagnoses_all.csv` and
-`heart_procedures.csv`.
+`heart_procedures.csv`. Predictions are adjudicated by an LLM-as-a-judge so
+metrics account for paraphrased or equivalent terminology rather than strict
+string matches.
 
 ```bash
 python main.py --patient-data-path /path/to/mimic-cardiac --json-output baseline.json
