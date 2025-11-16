@@ -41,11 +41,6 @@ class HuggingFaceGenerator:
     text_pipeline: Callable[..., List[Mapping[str, str]]] | None = None
 
     def __post_init__(self) -> None:
-        # base_kwargs: MutableMapping[str, Any] = {
-        #     "max_new_tokens": 128,
-        #     "return_full_text": True,
-        #     "do_sample": False,
-        # }
         base_kwargs: MutableMapping[str, Any] = {
             # --- sampling ---
             "do_sample": True,
@@ -53,7 +48,7 @@ class HuggingFaceGenerator:
             "top_p": 0.9,                # nucleus sampling
             "top_k": 50,                 # cap the candidate set
             # --- length & formatting ---
-            "max_new_tokens": 128,       # reduce if answers should be short
+            "max_new_tokens": 256,       # reduce if answers should be short
             "return_full_text": False,   # usually cleaner for post-processing
             # --- repetition controls ---
             "repetition_penalty": 1.15,  # 1.05–1.25; higher = stronger penalty

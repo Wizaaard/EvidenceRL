@@ -99,17 +99,7 @@ class LLMAnswerJudge:
             tokenizer=tokenizer,
             **pipeline_kwargs,
         )
-
-    # def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
-    #     return (
-    #         "You are an impartial medical examiner that verifies answers.\n"
-    #         "Compare the candidate answer with the gold standard and reply with\n"
-    #         "only 'correct' or 'incorrect'.\n\n"
-    #         f"Question: {query}\n"
-    #         f"Gold standard answer: {ground_truth}\n"
-    #         f"Candidate answer: {answer}\n\n"
-    #         "Verdict:"
-    #     )
+        
     def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
         return (
             "You are an impartial evaluator tasked with judging the equivalence of two answers.\n"
@@ -133,12 +123,6 @@ class LLMAnswerJudge:
             return text.strip().lower()
         return ""
 
-    # def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
-    #     prompt = self._build_prompt(query, answer, ground_truth)
-    #     self.last_prompt = prompt
-    #     outputs = self._pipeline(prompt, **self._generation_kwargs)
-    #     verdict = self._extract_verdict(outputs, prompt)
-    #     return verdict.startswith("correct")
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
         prompt = self._build_prompt(query, answer, ground_truth)
         self.last_prompt = prompt
