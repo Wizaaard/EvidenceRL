@@ -113,6 +113,8 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
     assert prediction.predicted_procedures[:2] == ["Cardiac catheterization", "Echocardiogram"]
     assert prediction.diagnoses_precision_at_k[2] == 1.0
     assert prediction.procedures_precision_at_k[2] == 1.0
+    assert prediction.ground_truth_diagnoses == ["Acute MI", "Heart failure"]
+    assert prediction.ground_truth_procedures == ["Cardiac catheterization", "Echocardiogram"]
     assert text_calls, "prompt should be sent to pipeline"
     assert judge.calls, "judge should score the predictions"
 
@@ -120,3 +122,8 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
     saved.write_text(json.dumps(prediction.to_dict()))
     loaded = json.loads(saved.read_text())
     assert loaded["predicted_diagnoses"][0] == "Acute MI"
+    assert loaded["ground_truth_diagnoses"] == ["Acute MI", "Heart failure"]
+    assert loaded["ground_truth_procedures"] == [
+        "Cardiac catheterization",
+        "Echocardiogram",
+    ]

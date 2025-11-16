@@ -104,8 +104,9 @@ python main.py --patient-data-path /path/to/mimic-cardiac --json-output baseline
 ```
 
 Use `--max-patients` to subsample cases when experimenting locally. The JSON
-payload captures the exact prompt, generated text, per-case metrics, and an
-aggregate precision/recall summary.
+payload captures the exact prompt, generated text, per-case metrics, the
+ground-truth diagnoses/procedures used for judging, and an aggregate
+precision/recall summary.
 
 ## Running Tests
 

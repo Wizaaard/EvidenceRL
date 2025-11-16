@@ -156,6 +156,8 @@ class PromptPrediction:
     prompt: str
     predicted_diagnoses: List[str]
     predicted_procedures: List[str]
+    ground_truth_diagnoses: List[str]
+    ground_truth_procedures: List[str]
     diagnoses_precision_at_k: dict[int, float]
     diagnoses_recall_at_k: dict[int, float]
     procedures_precision_at_k: dict[int, float]
@@ -168,6 +170,8 @@ class PromptPrediction:
             "generated_text": self.generated_text,
             "predicted_diagnoses": self.predicted_diagnoses,
             "predicted_procedures": self.predicted_procedures,
+            "ground_truth_diagnoses": self.ground_truth_diagnoses,
+            "ground_truth_procedures": self.ground_truth_procedures,
             "diagnoses_precision_at_k": self.diagnoses_precision_at_k,
             "diagnoses_recall_at_k": self.diagnoses_recall_at_k,
             "procedures_precision_at_k": self.procedures_precision_at_k,
@@ -305,6 +309,8 @@ class PromptingPredictor:
             prompt=prompt,
             predicted_diagnoses=predicted_diags,
             predicted_procedures=predicted_procs,
+            ground_truth_diagnoses=list(case.diagnoses),
+            ground_truth_procedures=list(case.procedures),
             diagnoses_precision_at_k=diag_precision,
             diagnoses_recall_at_k=diag_recall,
             procedures_precision_at_k=proc_precision,
