@@ -1,5 +1,12 @@
 """EvidenceRL: Retrieval-augmented generation with evidence-based rewards."""
 
+from .baseline import (
+    PatientCase,
+    PromptPrediction,
+    PromptingPredictor,
+    load_patient_cases,
+    summarise_predictions,
+)
 from .documents import CARDIAC_ICD_PREFIXES, Document, RetrievedDocument, load_cardiac_icd_documents
 from .evaluation import AnswerJudge, LLMAnswerJudge
 from .generation import HuggingFaceGenerator
@@ -11,6 +18,11 @@ __all__ = [
     "Document",
     "RetrievedDocument",
     "load_cardiac_icd_documents",
+    "PatientCase",
+    "PromptPrediction",
+    "PromptingPredictor",
+    "load_patient_cases",
+    "summarise_predictions",
     "AnswerJudge",
     "LLMAnswerJudge",
     "HuggingFaceGenerator",

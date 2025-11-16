@@ -13,7 +13,15 @@ SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from evidence_rl import Document, RagRlPipeline, RagRlResult, load_cardiac_icd_documents  # noqa: E402
+from evidence_rl import (
+    Document,
+    PromptingPredictor,
+    RagRlPipeline,
+    RagRlResult,
+    load_cardiac_icd_documents,
+    load_patient_cases,
+    summarise_predictions,
+)  # noqa: E402
 
 CARDIAC_DOCUMENTS: List[Document] = [
     Document(
@@ -127,6 +135,20 @@ def build_parser() -> argparse.ArgumentParser:
             "Optional path to the MIMIC-IV-Ext cardiac dataset directory. When provided, the demo "
             "uses real ICD diagnosis chapters from the CSVs instead of the built-in toy corpus."
         ),
+    )
+    parser.add_argument(
+        "--patient-data-path",
+        default=None,
+        help=(
+            "Optional path to the MIMIC-IV-Ext cardiac dataset directory to run the prompt-only baseline "
+            "for diagnoses and procedures."
+        ),
+    )
+    parser.add_argument(
+        "--max-patients",
+        type=int,
+        default=None,
+        help="Limit the number of patient cases processed in baseline mode.",
     )
     parser.add_argument(
         "--model-name",
@@ -254,6 +276,38 @@ def plot_distributions(results: Iterable[RagRlResult], output_dir: Path | str) -
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+
+    if args.patient_data_path:
+        try:
+            cases = load_patient_cases(args.patient_data_path, limit=args.max_patients)
+        except FileNotFoundError as exc:  # pragma: no cover - user feedback path
+            print(str(exc))
+            return
+
+        predictor = PromptingPredictor(model_name=args.model_name)
+        predictions = [predictor.predict(case) for case in cases]
+        summary = summarise_predictions(predictions)
+
+        for pred in predictions:
+            print(f"HADM {pred.hadm_id} predicted diagnoses: {pred.predicted_diagnoses}")
+            print(f"HADM {pred.hadm_id} predicted procedures: {pred.predicted_procedures}\n")
+
+        print("Averaged precision/recall:")
+        for key, value in sorted(summary.items()):
+            print(f"  {key}: {value:.3f}")
+
+        if args.json_output:
+            output_path = Path(args.json_output)
+            payload = {
+                "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "predictions": [pred.to_dict() for pred in predictions],
+                "summary": summary,
+            }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
+            print(f"Saved JSON results to {output_path.resolve()}")
+        return
 
     documents: List[Document]
     if args.data_path:

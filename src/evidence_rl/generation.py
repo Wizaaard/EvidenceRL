@@ -149,4 +149,82 @@ class HuggingFaceGenerator:
         return trimmed or generated
 
 
-__all__ = ["EvidenceGenerator", "HuggingFaceGenerator"]
+@dataclass
+class PromptOnlyGenerator:
+    """Generate free-form text from a full prompt without evidence injection."""
+
+    model_name: str = DEFAULT_MODEL_NAME
+    generation_kwargs: Mapping[str, Any] | None = None
+    text_pipeline: Callable[..., List[Mapping[str, str]]] | None = None
+
+    def __post_init__(self) -> None:
+        base_kwargs: MutableMapping[str, Any] = {
+            "max_new_tokens": 128,
+            "return_full_text": True,
+            "do_sample": False,
+        }
+        if self.generation_kwargs:
+            base_kwargs.update(dict(self.generation_kwargs))
+        self._generation_kwargs = dict(base_kwargs)
+
+        if self.text_pipeline is None:
+            self._pipeline = self._build_hf_pipeline()
+        else:
+            self._pipeline = self.text_pipeline
+        self.last_prompt: str | None = None
+
+    def _build_hf_pipeline(self) -> Callable[..., List[Mapping[str, str]]]:
+        try:
+            import torch
+        except ImportError:  # pragma: no cover
+            torch = None  # type: ignore[assignment]
+
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            pipeline as hf_pipeline,
+        )
+
+        model_kwargs: MutableMapping[str, Any] = {}
+        pipeline_kwargs: MutableMapping[str, Any] = {}
+
+        multi_gpu = False
+        if torch is not None and torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+            if gpu_count > 1:
+                multi_gpu = True
+                model_kwargs["device_map"] = "auto"
+            else:
+                pipeline_kwargs["device"] = 0
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+
+        if not multi_gpu and pipeline_kwargs.get("device") == 0:
+            model.to("cuda:0")
+
+        if not pipeline_kwargs:
+            return hf_pipeline(
+                "text-generation",
+                model=model,
+                tokenizer=tokenizer,
+            )
+
+        return hf_pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            **pipeline_kwargs,
+        )
+
+    def generate(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        outputs = self._pipeline(prompt, **self._generation_kwargs)
+        if not outputs:
+            return ""
+        generated = outputs[0].get("generated_text") or outputs[0].get("text") or ""
+        trimmed = generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
+        return trimmed or generated
+
+
+__all__ = ["EvidenceGenerator", "HuggingFaceGenerator", "PromptOnlyGenerator"]
