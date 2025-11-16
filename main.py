@@ -303,6 +303,7 @@ def main(argv: list[str] | None = None) -> None:
             output_path = Path(args.json_output)
             payload = {
                 "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
                 "predictions": [pred.to_dict() for pred in predictions],
                 "summary": summary,
             }
