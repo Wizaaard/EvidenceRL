@@ -126,8 +126,18 @@ def _judge_precision_recall_at_k(
             if idx in used:
                 continue
             query = (
-                f"Patient encounter:\n{patient_context}\n\n"
-                f"Does the candidate {label} match the gold standard {label}?"
+                f"Does the candidate {label} match the ground truth {label}?\n"
+                "Decide whether the candidate semantically matches the ground truth, "
+                "allowing for minor wording differences (e.g. synonyms, abbreviations) but not for "
+                "meaningful clinical differences.\n\n"
+                "Guidelines:\n"
+                "- Treat them as a TRUE if they refer to the same underlying clinical concept "
+                "  (e.g. 'acute decompensated heart failure' vs 'ADHF', or 'NSTEMI' vs "
+                "  'non-ST elevation myocardial infarction').\n"
+                "- Treat them as a FALSE if they differ in key clinical meaning, severity, "
+                "  acuity, or affected structure (e.g. 'mitral regurgitation' vs 'aortic stenosis', "
+                "  or 'stable angina' vs 'NSTEMI').\n"
+                "- Ignore differences in word order, punctuation, or capitalization.\n\n"
             )
             if judge.is_correct(query=query, answer=pred, ground_truth=truth_item):
                 hits += 1
@@ -194,8 +204,13 @@ def load_patient_cases(data_path: str | Path, limit: int | None = None) -> List[
         hadm_id = row.get("hadm_id", "")
         if not hadm_id:
             continue
+        icd_code = (row.get("icd_code") or "").strip()
+        
+        # Only include diagnoses with ICD codes starting with "I"
+        if not icd_code.upper().startswith("I"):
+            continue
         bucket = diagnoses_by_hadm.setdefault(hadm_id, [])
-        bucket.append(row.get("long_title") or row.get("icd_code") or "")
+        bucket.append(row.get("long_title") or icd_code)
 
     procedures_by_hadm: MutableMapping[str, List[str]] = {}
     for row in _load_rows(proc_path):
@@ -266,6 +281,34 @@ def _remove_placeholders_and_list_artifacts(text: str) -> str:
 
     return text
 
+def _remove_ids_and_diagnostic_sections(text: str) -> str:
+    """
+    Remove:
+    - ID header lines (note_id / subject_id / hadm_id)
+    - IMPRESSION: sections (any case)
+    - FINAL DIAGNOSIS: sections (any case)
+
+    Sections are removed from the header line through the next blank line
+    or end of text, to account for multi-line content.
+    """
+
+    # Drop any line that contains note_id / subject_id / hadm_id
+    text = re.sub(
+        r"(?im)^.*\b(note_id|subject_id|hadm_id)\s*:.*\n?",
+        "",
+        text,
+    )
+
+    # Remove IMPRESSION: and FINAL DIAGNOSIS: sections (multi-line)
+    # Handles variations like:
+    # "IMPRESSION:", "Impression :", "Final Diagnosis:", "FINAL DIAGNOSIS :"
+    section_pattern = re.compile(
+        r"^\s*(impression|final\s+diagnosis)\s*:.*?(?=\n\s*\n|^\S|\Z)",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    text = section_pattern.sub("", text)
+
+    return text
 
 def _cleanup_whitespace(text: str) -> str:
     """Collapse multiple blank lines and excess internal spaces."""
@@ -335,10 +378,13 @@ def clean_patient_information(raw: str) -> str:
     # 2) Remove placeholders and list artifacts
     text = _remove_placeholders_and_list_artifacts(text)
 
-    # 3) Clean ECG machine report
+    # 3) Remove IDs and diagnostic sections (IMPRESSION / FINAL DIAGNOSIS)
+    text = _remove_ids_and_diagnostic_sections(text)
+
+    # 4) Clean ECG machine report (deduplicate phrases)
     text = _clean_ecg_machine_report(text)
 
-    # 4) Normalize whitespace
+    # 5) Normalize whitespace
     text = _cleanup_whitespace(text)
 
     return text
@@ -368,17 +414,6 @@ class PromptingPredictor:
             text_pipeline=judge_pipeline,
         )
 
-    # def _build_prompt(self, case: PatientCase) -> str:
-    #     return (
-    #         "You are a clinical assistant. Read the patient information and propose the most likely diagnoses "
-    #         "and procedures. List the top 5 diagnoses followed by the top 5 procedures. Use concise bullet points.\n\n"
-    #         f"Patient information:\n{case.context}\n\n"
-    #         "Format:\n"
-    #         "Diagnoses:\n"
-    #         "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-    #         "Procedures:\n"
-    #         "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-    #     )
     def _build_prompt(self, case: PatientCase) -> str:
         cleaned_context = clean_patient_information(case.context)
         return (
@@ -397,7 +432,8 @@ class PromptingPredictor:
             "Diagnoses:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Procedures:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n\n"
+            "Diagnoses:\n1."
         )
 
     def predict(self, case: PatientCase) -> PromptPrediction:
