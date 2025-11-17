@@ -439,6 +439,7 @@ class PromptingPredictor:
     def predict(self, case: PatientCase) -> PromptPrediction:
         prompt = self._build_prompt(case)
         generated = self.generator.generate(prompt)
+        generated = "Diagnoses:\n1. " + generated
         predicted_diags = _parse_ranked_items(generated, "Diagnoses")
         predicted_procs = _parse_ranked_items(generated, "Procedures")
 
