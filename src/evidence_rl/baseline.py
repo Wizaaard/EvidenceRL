@@ -494,6 +494,7 @@ class PromptingPredictor:
 
         predictions: List[PromptPrediction] = []
         for case, prompt, generated in zip(cases, prompts, generations):
+            generated = "Diagnoses:\n1. " + generated
             predicted_diags = _parse_ranked_items(generated, "Diagnoses")
             predicted_procs = _parse_ranked_items(generated, "Procedures")
 
