@@ -529,6 +529,7 @@ class PromptingPredictor:
 
             predictions.append(
                 PromptPrediction(
+                    subject_id=case.subject_id,
                     hadm_id=case.hadm_id,
                     generated_text=generated,
                     prompt=prompt,
