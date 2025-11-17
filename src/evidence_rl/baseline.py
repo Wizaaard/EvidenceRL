@@ -483,6 +483,64 @@ class PromptingPredictor:
             procedures_recall_at_k=proc_recall,
         )
 
+    def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
+        """Predict diagnoses and procedures for multiple cases with batched LLM calls."""
+
+        if not cases:
+            return []
+
+        prompts = [self._build_prompt(case) for case in cases]
+        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
+
+        predictions: List[PromptPrediction] = []
+        for case, prompt, generated in zip(cases, prompts, generations):
+            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
+            predicted_procs = _parse_ranked_items(generated, "Procedures")
+
+            diag_precision: dict[int, float] = {}
+            diag_recall: dict[int, float] = {}
+            proc_precision: dict[int, float] = {}
+            proc_recall: dict[int, float] = {}
+            for k in range(1, 6):
+                p, r = _judge_precision_recall_at_k(
+                    predicted_diags,
+                    case.diagnoses,
+                    k,
+                    judge=self.judge,
+                    patient_context=case.context,
+                    label="diagnosis",
+                )
+                diag_precision[k] = p
+                diag_recall[k] = r
+                p2, r2 = _judge_precision_recall_at_k(
+                    predicted_procs,
+                    case.procedures,
+                    k,
+                    judge=self.judge,
+                    patient_context=case.context,
+                    label="procedure",
+                )
+                proc_precision[k] = p2
+                proc_recall[k] = r2
+
+            predictions.append(
+                PromptPrediction(
+                    hadm_id=case.hadm_id,
+                    generated_text=generated,
+                    prompt=prompt,
+                    predicted_diagnoses=predicted_diags,
+                    predicted_procedures=predicted_procs,
+                    ground_truth_diagnoses=list(case.diagnoses),
+                    ground_truth_procedures=list(case.procedures),
+                    diagnoses_precision_at_k=diag_precision,
+                    diagnoses_recall_at_k=diag_recall,
+                    procedures_precision_at_k=proc_precision,
+                    procedures_recall_at_k=proc_recall,
+                )
+            )
+
+        return predictions
+
 
 def summarise_predictions(predictions: Iterable[PromptPrediction]) -> dict[str, float]:
     totals: MutableMapping[str, float] = {}

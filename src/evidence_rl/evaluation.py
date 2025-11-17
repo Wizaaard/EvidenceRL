@@ -112,7 +112,6 @@ class LLMAnswerJudge:
             "Verdict:"
         )
 
-
     @staticmethod
     def _extract_verdict(outputs: Iterable[Mapping[str, str]], prompt: str) -> str:
         for output in outputs:

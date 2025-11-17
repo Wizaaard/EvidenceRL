@@ -221,5 +221,36 @@ class PromptOnlyGenerator:
         trimmed = generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
         return trimmed or generated
 
+    def generate_batch(self, prompts: Iterable[str], batch_size: int | None = None) -> List[str]:
+        """Generate text for multiple prompts in a single, batched pipeline call."""
+
+        prompt_list = list(prompts)
+        if not prompt_list:
+            return []
+
+        kwargs = dict(self._generation_kwargs)
+        if batch_size is not None:
+            kwargs["batch_size"] = batch_size
+
+        try:
+            outputs = self._pipeline(prompt_list, **kwargs)
+        except TypeError:
+            return [self.generate(prompt) for prompt in prompt_list]
+
+        results: List[str] = []
+        for prompt, output in zip(prompt_list, outputs):
+            if not output:
+                results.append("")
+                continue
+            generated = output[0].get("generated_text") or output[0].get("text") or ""
+            trimmed = (
+                generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
+            )
+            results.append(trimmed or generated)
+
+        if prompt_list:
+            self.last_prompt = prompt_list[-1]
+        return results
+
 
 __all__ = ["EvidenceGenerator", "HuggingFaceGenerator", "PromptOnlyGenerator"]

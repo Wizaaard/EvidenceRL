@@ -103,10 +103,12 @@ string matches.
 python main.py --patient-data-path /path/to/mimic-cardiac --json-output baseline.json
 ```
 
-Use `--max-patients` to subsample cases when experimenting locally. The JSON
-payload captures the exact prompt, generated text, per-case metrics, the
-ground-truth diagnoses/procedures used for judging, and an aggregate
-precision/recall summary.
+Use `--max-patients` to subsample cases when experimenting locally. To maximise
+GPU utilisation, the baseline batches prompts through the generator using a
+dataset-style call; tune `--batch-size` to suit your hardware. The JSON payload
+captures the exact prompt, generated text, per-case metrics, the ground-truth
+diagnoses/procedures used for judging, and an aggregate precision/recall
+summary.
 
 ## Running Tests
 

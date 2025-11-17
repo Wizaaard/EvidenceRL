@@ -127,3 +127,50 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
         "Cardiac catheterization",
         "Echocardiogram",
     ]
+
+
+def test_predict_many_batches_prompts(tmp_path: Path):
+    base = tmp_path
+    (base / "heart_diagnoses.csv").write_text(
+        "note_id,subject_id,hadm_id,note_type,note_seq,charttime,storetime,HPI,physical_exam,chief_complaint,invasions,X-ray,CT,Ultrasound,CATH,ECG,MRI,reports\n"
+        "n1,s1,h1,DS,1,2020-01-01,2020-01-01,Sharp pain,,Angina,,,Normal,,,Normal,,Sinus rhythm\n"
+        "n2,s2,h2,DS,1,2020-02-01,2020-02-01,Shortness of breath,,CHF,,,Normal,,,Normal,,Sinus rhythm\n"
+    )
+    (base / "heart_diagnoses_all.csv").write_text(
+        "subject_id,hadm_id,seq_num,icd_code,long_title\n"
+        "s1,h1,1,I21,Acute MI\n"
+        "s2,h2,1,I50,Heart failure\n"
+    )
+    (base / "heart_procedures.csv").write_text(
+        "subject_id,hadm_id,seq_num,chartdate,icd_code,long_title\n"
+        "s1,h1,1,2020-01-02,37.1,Cardiac catheterization\n"
+        "s2,h2,1,2020-02-02,37.2,Echocardiogram\n"
+    )
+
+    pipeline_calls: list[tuple[object, object]] = []
+
+    def batch_pipeline(prompts, batch_size=None, **_: object):  # type: ignore[override]
+        pipeline_calls.append((prompts, batch_size))
+        outputs = []
+        for idx, _ in enumerate(prompts):
+            outputs.append(
+                [
+                    {
+                        "generated_text": (
+                            f"Diagnoses:\n1. Prediction {idx}\n"
+                            f"Procedures:\n1. Procedure {idx}"
+                        )
+                    }
+                ]
+            )
+        return outputs
+
+    judge = StubJudge()
+    predictor = PromptingPredictor(text_pipeline=batch_pipeline, answer_judge=judge)
+    cases = load_patient_cases(base)
+    predictions = predictor.predict_many(cases, batch_size=2)
+
+    assert len(predictions) == 2
+    assert len(pipeline_calls) == 1
+    assert pipeline_calls[0][1] == 2
+    assert judge.calls, "judge should still score predictions in batched mode"

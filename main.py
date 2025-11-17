@@ -159,6 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Batch size for prompt-only baseline generation (for GPU efficiency).",
+    )
+    parser.add_argument(
         "--judge-model-name",
         default=None,
         help=(
@@ -288,7 +294,7 @@ def main(argv: list[str] | None = None) -> None:
             model_name=args.model_name,
             judge_model_name=args.judge_model_name,
         )
-        predictions = [predictor.predict(case) for case in cases]
+        predictions = predictor.predict_many(cases, batch_size=args.batch_size)
         summary = summarise_predictions(predictions)
 
         for pred in predictions:
