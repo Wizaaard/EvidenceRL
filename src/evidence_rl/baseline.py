@@ -13,7 +13,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
 from .generation import DEFAULT_MODEL_NAME, PromptOnlyGenerator
 from .evaluation import LLMAnswerJudge, AnswerJudge
@@ -126,8 +126,18 @@ def _judge_precision_recall_at_k(
             if idx in used:
                 continue
             query = (
-                f"Patient encounter:\n{patient_context}\n\n"
-                f"Does the candidate {label} match the gold standard {label}?"
+                f"Does the candidate {label} match the ground truth {label}?\n"
+                "Decide whether the candidate semantically matches the ground truth, "
+                "allowing for minor wording differences (e.g. synonyms, abbreviations) but not for "
+                "meaningful clinical differences.\n\n"
+                "Guidelines:\n"
+                "- Treat them as a TRUE if they refer to the same underlying clinical concept "
+                "  (e.g. 'acute decompensated heart failure' vs 'ADHF', or 'NSTEMI' vs "
+                "  'non-ST elevation myocardial infarction').\n"
+                "- Treat them as a FALSE if they differ in key clinical meaning, severity, "
+                "  acuity, or affected structure (e.g. 'mitral regurgitation' vs 'aortic stenosis', "
+                "  or 'stable angina' vs 'NSTEMI').\n"
+                "- Ignore differences in word order, punctuation, or capitalization.\n\n"
             )
             if judge.is_correct(query=query, answer=pred, ground_truth=truth_item):
                 hits += 1
@@ -194,8 +204,13 @@ def load_patient_cases(data_path: str | Path, limit: int | None = None) -> List[
         hadm_id = row.get("hadm_id", "")
         if not hadm_id:
             continue
+        icd_code = (row.get("icd_code") or "").strip()
+        
+        # Only include diagnoses with ICD codes starting with "I"
+        if not icd_code.upper().startswith("I"):
+            continue
         bucket = diagnoses_by_hadm.setdefault(hadm_id, [])
-        bucket.append(row.get("long_title") or row.get("icd_code") or "")
+        bucket.append(row.get("long_title") or icd_code)
 
     procedures_by_hadm: MutableMapping[str, List[str]] = {}
     for row in _load_rows(proc_path):
@@ -234,6 +249,146 @@ def load_patient_cases(data_path: str | Path, limit: int | None = None) -> List[
         raise ValueError("No patient cases with ground-truth diagnoses or procedures were found.")
     return cases
 
+def _normalize_newlines(text: str) -> str:
+    """Turn escaped \\n into real newlines and normalize CRLF."""
+    # If the string comes from a JSON / DB dump with literal "\n"
+    text = text.replace("\\n", "\n")
+    # Normalize Windows newlines
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text
+
+
+def _remove_placeholders_and_list_artifacts(text: str) -> str:
+    """
+    Remove '___' placeholders and simple list artifacts like ['...'], ": ___, etc.
+    This is intentionally conservative so we don't eat real clinical content.
+    """
+    # Remove "___" placeholders, leaving a single space
+    text = re.sub(r"\b_+\b", " ", text)
+    
+    # Remove leading list wrappers like [' ... '] on single lines
+    # e.g. "X-ray: [': ___\nRight upper lobe...']" -> "X-ray:\nRight upper lobe..."
+    text = text.replace("[': ___", "")
+    text = text.replace("': ___", "")
+    text = text.replace('": ___', "")
+    text = text.replace("['", "")
+    text = text.replace("']", "")
+    text = text.replace('["', "")
+    text = text.replace('"]', "")
+
+    # Some weird combos like "___- PCI)" -> " PCI)"
+    text = re.sub(r"_+\s*-\s*", "", text)
+
+    return text
+
+def _remove_ids_and_diagnostic_sections(text: str) -> str:
+    """
+    Remove:
+    - ID header lines (note_id / subject_id / hadm_id)
+    - IMPRESSION: sections (any case)
+    - FINAL DIAGNOSIS: sections (any case)
+
+    Sections are removed from the header line through the next blank line
+    or end of text, to account for multi-line content.
+    """
+
+    # Drop any line that contains note_id / subject_id / hadm_id
+    text = re.sub(
+        r"(?im)^.*\b(note_id|subject_id|hadm_id)\s*:.*\n?",
+        "",
+        text,
+    )
+
+    # Remove IMPRESSION: and FINAL DIAGNOSIS: sections (multi-line)
+    # Handles variations like:
+    # "IMPRESSION:", "Impression :", "Final Diagnosis:", "FINAL DIAGNOSIS :"
+    section_pattern = re.compile(
+        r"^\s*(impression|final\s+diagnosis)\s*:.*?(?=\n\s*\n|^\S|\Z)",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    text = section_pattern.sub("", text)
+
+    return text
+
+def _cleanup_whitespace(text: str) -> str:
+    """Collapse multiple blank lines and excess internal spaces."""
+    # Strip trailing spaces at end of lines
+    text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+    # Collapse 3+ blank lines to max 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Collapse multiple spaces
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
+def _clean_ecg_machine_report_block(block: str) -> str:
+    """
+    Clean the 'ECG machine report:' line:
+    - split on ';'
+    - trim whitespace
+    - deduplicate phrases while keeping order
+    - drop empty items
+    """
+    # Get everything after the label
+    prefix = "ECG machine report:"
+    _, _, rest = block.partition(prefix)
+    rest = rest.strip()
+
+    # Split on semicolons that separate phrases
+    parts = [p.strip() for p in rest.split(";")]
+
+    seen = set()
+    unique_parts = []
+    for p in parts:
+        if not p:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        unique_parts.append(p)
+
+    cleaned = prefix + " " + "; ".join(unique_parts) + "."
+    return cleaned
+
+
+def _clean_ecg_machine_report(text: str) -> str:
+    """
+    Find 'ECG machine report:' and clean that line only.
+    Assumes the whole ECG report is on a single long logical line.
+    """
+    pattern = r"ECG machine report:[^\n]*"
+
+    def repl(match: re.Match) -> str:
+        block = match.group(0)
+        return _clean_ecg_machine_report_block(block)
+
+    return re.sub(pattern, repl, text)
+
+
+def clean_patient_information(raw: str) -> str:
+    """
+    Main entry point to clean raw patient information notes
+    (like your example) into a more readable, LLM-friendly form.
+    """
+    text = raw
+
+    # 1) Normalize newlines
+    text = _normalize_newlines(text)
+
+    # 2) Remove placeholders and list artifacts
+    text = _remove_placeholders_and_list_artifacts(text)
+
+    # 3) Remove IDs and diagnostic sections (IMPRESSION / FINAL DIAGNOSIS)
+    text = _remove_ids_and_diagnostic_sections(text)
+
+    # 4) Clean ECG machine report (deduplicate phrases)
+    text = _clean_ecg_machine_report(text)
+
+    # 5) Normalize whitespace
+    text = _cleanup_whitespace(text)
+
+    return text
+
 
 class PromptingPredictor:
     """Prompt an LLM for diagnoses and procedures using textualised patient data."""
@@ -260,20 +415,31 @@ class PromptingPredictor:
         )
 
     def _build_prompt(self, case: PatientCase) -> str:
+        cleaned_context = clean_patient_information(case.context)
         return (
-            "You are a clinical assistant. Read the patient information and propose the most likely diagnoses "
-            "and procedures. List the top 5 diagnoses followed by the top 5 procedures. Use concise bullet points.\n\n"
-            f"Patient information:\n{case.context}\n\n"
-            "Format:\n"
+            "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
+            "cardiovascular disease using current evidence-based guidelines.\n\n"
+            "Read the patient information and identify the most likely *cardiac* diagnoses and the most "
+            "appropriate *cardiology-related* procedures.\n"
+            "- Prioritize cardiovascular conditions (ischemic heart disease, arrhythmias, heart failure, "
+            "valvular disease, cardiomyopathies, pericardial disease, pulmonary hypertension, etc.).\n"
+            "- Rank diagnoses from most to least likely based on the clinical data.\n"
+            "- Focus on concise, guideline-aligned procedure recommendations (e.g., ECG, troponins, "
+            "echocardiography, stress testing, cath/PCI, advanced imaging).\n"
+            "- Use short, clinical phrases only. Do not add explanations or extra sections.\n\n"
+            f"Patient information:\n{cleaned_context}\n\n"
+            "Format (exactly):\n"
             "Diagnoses:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Procedures:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n\n"
+            "Diagnoses:\n1."
         )
 
     def predict(self, case: PatientCase) -> PromptPrediction:
         prompt = self._build_prompt(case)
         generated = self.generator.generate(prompt)
+        generated = "Diagnoses:\n1. " + generated
         predicted_diags = _parse_ranked_items(generated, "Diagnoses")
         predicted_procs = _parse_ranked_items(generated, "Procedures")
 
