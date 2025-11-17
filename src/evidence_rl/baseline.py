@@ -161,6 +161,7 @@ class PatientCase:
 
 @dataclass
 class PromptPrediction:
+    subject_id: str
     hadm_id: str
     generated_text: str
     prompt: str
@@ -175,6 +176,7 @@ class PromptPrediction:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "subject_id": self.subject_id,
             "hadm_id": self.hadm_id,
             "prompt": self.prompt,
             "generated_text": self.generated_text,
@@ -470,6 +472,7 @@ class PromptingPredictor:
             proc_recall[k] = r2
 
         return PromptPrediction(
+            subject_id=case.subject_id,
             hadm_id=case.hadm_id,
             generated_text=generated,
             prompt=prompt,
