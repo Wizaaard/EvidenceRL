@@ -22,6 +22,7 @@ from evidence_rl import (
     load_cardiac_icd_documents,
     load_documents_from_jsonl,
     load_patient_cases,
+    patient_cases_to_rag_queries,
     load_pdf_knowledge_documents,
     summarise_predictions,
 )  # noqa: E402
@@ -143,15 +144,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--patient-data-path",
         default=None,
         help=(
-            "Optional path to the MIMIC-IV-Ext cardiac dataset directory to run the prompt-only baseline "
+            "Optional path to the MIMIC-IV-Ext cardiac dataset directory to run patient-focused pipelines "
             "for diagnoses and procedures."
+        ),
+    )
+    parser.add_argument(
+        "--patient-pipeline",
+        choices=["baseline", "rag"],
+        default="baseline",
+        help=(
+            "Choose whether to run the prompt-only patient baseline or the RAG pipeline when "
+            "--patient-data-path is provided."
         ),
     )
     parser.add_argument(
         "--max-patients",
         type=int,
         default=None,
-        help="Limit the number of patient cases processed in baseline mode.",
+        help="Limit the number of patient cases processed when using patient data.",
     )
     parser.add_argument(
         "--model-name",
@@ -224,6 +234,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def load_documents_from_args(args) -> List[Document]:
+    knowledge_jsonl_path = Path(args.knowledge_jsonl) if args.knowledge_jsonl else None
+    if knowledge_jsonl_path and knowledge_jsonl_path.exists():
+        return load_documents_from_jsonl(knowledge_jsonl_path)
+
+    if args.knowledge_path:
+        documents = load_pdf_knowledge_documents(
+            args.knowledge_path,
+            chunk_size=args.chunk_size,
+            overlap=args.chunk_overlap,
+        )
+        if knowledge_jsonl_path:
+            export_documents_jsonl(documents, knowledge_jsonl_path)
+            print(f"Exported chunked knowledge to {knowledge_jsonl_path.resolve()}")
+        return documents
+
+    if args.data_path:
+        return load_cardiac_icd_documents(args.data_path)
+
+    return CARDIAC_DOCUMENTS
+
+
 def format_case_output(result: RagRlResult, ground_truth: str) -> str:
     pre_lines = "\n".join(
         f"  - {item.document.doc_id}: score={item.score:.3f}" for item in result.pre_evidence
@@ -256,7 +288,8 @@ def run_cases(
     for index, case in enumerate(cases, start=1):
         json_path = None
         if save_dir is not None:
-            json_path = save_dir / f"case_{index:02d}.json"
+            case_id = case.get("case_id") or f"case_{index:02d}"
+            json_path = save_dir / f"{case_id}.json"
         result = pipeline.run(
             case["query"],
             ground_truth=case.get("ground_truth"),
@@ -314,18 +347,20 @@ def plot_distributions(results: Iterable[RagRlResult], output_dir: Path | str) -
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
+    patient_cases = None
     if args.patient_data_path:
         try:
-            cases = load_patient_cases(args.patient_data_path, limit=args.max_patients)
+            patient_cases = load_patient_cases(args.patient_data_path, limit=args.max_patients)
         except FileNotFoundError as exc:  # pragma: no cover - user feedback path
             print(str(exc))
             return
 
+    if patient_cases and args.patient_pipeline == "baseline":
         predictor = PromptingPredictor(
             model_name=args.model_name,
             judge_model_name=args.judge_model_name,
         )
-        predictions = predictor.predict_many(cases, batch_size=args.batch_size)
+        predictions = predictor.predict_many(patient_cases, batch_size=args.batch_size)
         summary = summarise_predictions(predictions)
 
         for pred in predictions:
@@ -350,23 +385,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Saved JSON results to {output_path.resolve()}")
         return
 
-    documents: List[Document]
-    knowledge_jsonl_path = Path(args.knowledge_jsonl) if args.knowledge_jsonl else None
-    if knowledge_jsonl_path and knowledge_jsonl_path.exists():
-        documents = load_documents_from_jsonl(knowledge_jsonl_path)
-    elif args.knowledge_path:
-        documents = load_pdf_knowledge_documents(
-            args.knowledge_path,
-            chunk_size=args.chunk_size,
-            overlap=args.chunk_overlap,
-        )
-        if knowledge_jsonl_path:
-            export_documents_jsonl(documents, knowledge_jsonl_path)
-            print(f"Exported chunked knowledge to {knowledge_jsonl_path.resolve()}")
-    elif args.data_path:
-        documents = load_cardiac_icd_documents(args.data_path)
-    else:
-        documents = CARDIAC_DOCUMENTS
+    documents = load_documents_from_args(args)
 
     try:
         pipeline = RagRlPipeline(
@@ -392,7 +411,11 @@ def main(argv: list[str] | None = None) -> None:
             per_case_dir = output_path
             summary_path = output_path / "results.json"
 
-    results = run_cases(pipeline, SAMPLE_CASES, save_dir=per_case_dir)
+    cases = SAMPLE_CASES
+    if patient_cases and args.patient_pipeline == "rag":
+        cases = patient_cases_to_rag_queries(patient_cases)
+
+    results = run_cases(pipeline, cases, save_dir=per_case_dir)
 
     if args.plot_dir:
         plot_distributions(results, args.plot_dir)

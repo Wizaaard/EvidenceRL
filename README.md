@@ -138,6 +138,21 @@ captures the exact prompt, generated text, per-case metrics, the ground-truth
 diagnoses/procedures used for judging, and an aggregate precision/recall
 summary.
 
+If you want to keep the patient-note prompts but add retrieval from your
+clinical guideline corpus, switch to the RAG pipeline with `--patient-pipeline
+rag` and point the CLI at your `Medical_Knowledge` folder (or a prebuilt
+JSONL) using `--knowledge-path`/`--knowledge-jsonl`:
+
+```bash
+python main.py --patient-data-path /path/to/mimic-cardiac \
+  --patient-pipeline rag --knowledge-path /path/to/Medical_Knowledge \
+  --json-output rag_results.json
+```
+
+This uses the same patient textualisation and diagnosis/procedure prompt as the
+baseline while injecting retrieved guideline chunks into the generator prompt
+before computing alignment-aware rewards.
+
 ## Running Tests
 
 ```bash

@@ -10,6 +10,7 @@ from evidence_rl.baseline import (
     _precision_recall_at_k,
     _textualise_patient,
     load_patient_cases,
+    patient_cases_to_rag_queries,
 )
 
 
@@ -185,3 +186,29 @@ def test_predict_many_batches_prompts(tmp_path: Path):
     assert len(pipeline_calls) == 1
     assert pipeline_calls[0][1] == 2
     assert judge.batch_calls, "judge should batch score predictions when available"
+
+
+def test_patient_cases_to_rag_queries_includes_truth(tmp_path):
+    base = tmp_path / "data"
+    base.mkdir()
+    (base / "heart_diagnoses.csv").write_text(
+        "note_id,subject_id,hadm_id,note_type,note_seq,charttime,storetime,HPI,physical_exam,chief_complaint,invasions,X-ray,CT,Ultrasound,CATH,ECG,MRI,reports\n"
+        "1,10,100,DS,1,2020-01-01,2020-01-01,History,Exam,Complaint,None,None,None,None,None,None,None,None\n",
+        encoding="utf-8",
+    )
+    (base / "heart_diagnoses_all.csv").write_text(
+        "subject_id,hadm_id,seq_num,icd_code,long_title\n10,100,1,I20,Angina\n",
+        encoding="utf-8",
+    )
+    (base / "heart_procedures.csv").write_text(
+        "subject_id,hadm_id,seq_num,chartdate,icd_code,long_title\n10,100,1,2020-01-01,1234,PCI\n",
+        encoding="utf-8",
+    )
+
+    cases = load_patient_cases(base)
+    rag_cases = patient_cases_to_rag_queries(cases)
+
+    assert rag_cases[0]["case_id"] == "100"
+    assert "Angina" in rag_cases[0]["ground_truth"]
+    assert "PCI" in rag_cases[0]["ground_truth"]
+    assert "Diagnoses" in rag_cases[0]["query"]
