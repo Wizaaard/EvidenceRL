@@ -116,14 +116,15 @@ class LLMAnswerJudge:
             tokenizer=tokenizer,
             **pipeline_kwargs,
         )
-
+        
     def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
         return (
-            "You are an impartial medical examiner that verifies answers.\n"
-            "Compare the candidate answer with the gold standard and reply with\n"
-            "only 'correct' or 'incorrect'.\n\n"
+            "You are an impartial evaluator tasked with judging the equivalence of two answers.\n"
+            "Compare the candidate answer with the ground truth and decide if they convey the same meaning.\n"
+            "Respond only with 'True' if the candidate answer is semantically equivalent to the ground truth, "
+            "or 'False' otherwise.\n\n"
             f"Question: {query}\n"
-            f"Gold standard answer: {ground_truth}\n"
+            f"Ground truth: {ground_truth}\n"
             f"Candidate answer: {answer}\n\n"
             "Verdict:"
         )
@@ -144,7 +145,7 @@ class LLMAnswerJudge:
         outputs = self._pipeline(prompt, **self._generation_kwargs)
         verdict = self._extract_verdict(outputs, prompt)
         self.last_answer = verdict
-        return verdict.startswith("correct")
+        return verdict.startswith("true")
 
     def is_correct_batch(
         self,
@@ -165,7 +166,7 @@ class LLMAnswerJudge:
             verdicts.append(self._extract_verdict(prompt_outputs, prompt))
 
         self.last_answer = verdicts[-1] if verdicts else None
-        return [verdict.startswith("correct") for verdict in verdicts]
+        return [verdict.startswith("true") for verdict in verdicts]
 
 
 __all__ = ["AnswerJudge", "LLMAnswerJudge"]
