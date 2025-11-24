@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from evidence_rl.baseline import (
+    PatientCase,
     PromptingPredictor,
+    RAGPredictor,
     _judge_precision_recall_at_k,
     _parse_ranked_items,
     _precision_recall_at_k,
@@ -12,6 +14,7 @@ from evidence_rl.baseline import (
     load_patient_cases,
     patient_cases_to_rag_queries,
 )
+from evidence_rl.documents import Document
 
 
 def test_textualise_patient_includes_sections():
@@ -212,3 +215,47 @@ def test_patient_cases_to_rag_queries_includes_truth(tmp_path):
     assert "Angina" in rag_cases[0]["ground_truth"]
     assert "PCI" in rag_cases[0]["ground_truth"]
     assert "Diagnoses" in rag_cases[0]["query"]
+
+
+def test_rag_predictor_augments_prompts_with_retrieval(tmp_path: Path):
+    documents = [
+        Document(doc_id="guideline-1", text="Chest pain management with aspirin."),
+        Document(doc_id="guideline-2", text="Nephrology consult guidance."),
+    ]
+
+    pipeline_calls: list[str] = []
+
+    def fake_generator(prompts, **_: object):  # type: ignore[override]
+        pipeline_calls.extend(prompts if isinstance(prompts, list) else [prompts])
+        return [
+            {
+                "generated_text": (
+                    "Diagnoses:\n1. Unstable angina\n2. --\n"
+                    "Procedures:\n1. Aspirin therapy\n2. --"
+                )
+            }
+        ]
+
+    judge = StubJudge()
+    predictor = RAGPredictor(
+        documents,
+        top_k=1,
+        text_pipeline=fake_generator,
+        answer_judge=judge,
+    )
+
+    case = PatientCase(
+        hadm_id="h1",
+        subject_id="s1",
+        note_id="n1",
+        context="Chief complaint: chest pain with radiation to left arm",
+        diagnoses=["Unstable angina"],
+        procedures=["Aspirin therapy"],
+    )
+
+    prediction = predictor.predict(case)
+
+    assert any("Chest pain management" in prompt for prompt in pipeline_calls)
+    assert prediction.predicted_diagnoses[0] == "Unstable angina"
+    assert prediction.diagnoses_precision_at_k[1] == 1.0
+    assert judge.calls, "Judge should evaluate predictions"
