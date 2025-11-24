@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Mapping, MutableMapping, Sequence
+from abc import ABC, abstractmethod
 
 from .generation import DEFAULT_MODEL_NAME, PromptOnlyGenerator
 from .evaluation import LLMAnswerJudge, AnswerJudge
@@ -393,9 +394,8 @@ def clean_patient_information(raw: str) -> str:
 
     return text
 
-
-class PromptingPredictor:
-    """Prompt an LLM for diagnoses and procedures using textualised patient data."""
+class BasePredictor(ABC):
+    """Base predictor for patient cases using an LLM and an AnswerJudge."""
 
     def __init__(
         self,
@@ -418,6 +418,121 @@ class PromptingPredictor:
             text_pipeline=judge_pipeline,
         )
 
+    @abstractmethod
+    def _build_prompt(self, case: PatientCase) -> str:
+        """Construct the LLM prompt for a given patient case."""
+        raise NotImplementedError
+
+    def _postprocess_generated(self, raw: str) -> str:
+        """
+        Optional hook to normalize the raw generation into a string that
+        `_parse_ranked_items` can consume. Default is identity.
+        """
+        return raw
+
+    def _score_predictions(
+        self,
+        case: PatientCase,
+        predicted_diags: Sequence[str],
+        predicted_procs: Sequence[str],
+    ) -> tuple[dict[int, float], dict[int, float], dict[int, float], dict[int, float]]:
+        """Compute precision/recall@k for diagnoses and procedures."""
+        diag_precision: dict[int, float] = {}
+        diag_recall: dict[int, float] = {}
+        proc_precision: dict[int, float] = {}
+        proc_recall: dict[int, float] = {}
+
+        for k in range(1, 6):
+            p, r = _judge_precision_recall_at_k(
+                predicted_diags,
+                case.diagnoses,
+                k,
+                judge=self.judge,
+                patient_context=case.context,
+                label="diagnosis",
+            )
+            diag_precision[k] = p
+            diag_recall[k] = r
+
+            p2, r2 = _judge_precision_recall_at_k(
+                predicted_procs,
+                case.procedures,
+                k,
+                judge=self.judge,
+                patient_context=case.context,
+                label="procedure",
+            )
+            proc_precision[k] = p2
+            proc_recall[k] = r2
+
+        return diag_precision, diag_recall, proc_precision, proc_recall
+
+    def predict(self, case: PatientCase) -> PromptPrediction:
+        prompt = self._build_prompt(case)
+        generated_raw = self.generator.generate(prompt)
+        generated = self._postprocess_generated(generated_raw)
+
+        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
+        predicted_procs = _parse_ranked_items(generated, "Procedures")
+
+        diag_precision, diag_recall, proc_precision, proc_recall = self._score_predictions(
+            case, predicted_diags, predicted_procs
+        )
+
+        return PromptPrediction(
+            subject_id=getattr(case, "subject_id", None),
+            hadm_id=case.hadm_id,
+            generated_text=generated,
+            prompt=prompt,
+            predicted_diagnoses=predicted_diags,
+            predicted_procedures=predicted_procs,
+            ground_truth_diagnoses=list(case.diagnoses),
+            ground_truth_procedures=list(case.procedures),
+            diagnoses_precision_at_k=diag_precision,
+            diagnoses_recall_at_k=diag_recall,
+            procedures_precision_at_k=proc_precision,
+            procedures_recall_at_k=proc_recall,
+        )
+
+    def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
+        if not cases:
+            return []
+
+        prompts = [self._build_prompt(case) for case in cases]
+        generations_raw = self.generator.generate_batch(prompts, batch_size=batch_size)
+
+        predictions: List[PromptPrediction] = []
+        for case, prompt, generated_raw in zip(cases, prompts, generations_raw):
+            generated = self._postprocess_generated(generated_raw)
+
+            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
+            predicted_procs = _parse_ranked_items(generated, "Procedures")
+
+            diag_precision, diag_recall, proc_precision, proc_recall = self._score_predictions(
+                case, predicted_diags, predicted_procs
+            )
+
+            predictions.append(
+                PromptPrediction(
+                    subject_id=getattr(case, "subject_id", None),
+                    hadm_id=case.hadm_id,
+                    generated_text=generated,
+                    prompt=prompt,
+                    predicted_diagnoses=predicted_diags,
+                    predicted_procedures=predicted_procs,
+                    ground_truth_diagnoses=list(case.diagnoses),
+                    ground_truth_procedures=list(case.procedures),
+                    diagnoses_precision_at_k=diag_precision,
+                    diagnoses_recall_at_k=diag_recall,
+                    procedures_precision_at_k=proc_precision,
+                    procedures_recall_at_k=proc_recall,
+                )
+            )
+        return predictions
+
+class PromptingPredictor(BasePredictor):
+    """Prompt an LLM for cardiology diagnoses and procedures using textualised patient data."""
+
     def _build_prompt(self, case: PatientCase) -> str:
         cleaned_context = clean_patient_information(case.context)
         return (
@@ -436,120 +551,16 @@ class PromptingPredictor:
             "Diagnoses:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Procedures:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n\n"
+            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Diagnoses:\n1."
         )
 
-    def predict(self, case: PatientCase) -> PromptPrediction:
-        prompt = self._build_prompt(case)
-        generated = self.generator.generate(prompt)
-        generated = "Diagnoses:\n1. " + generated
-        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-        predicted_procs = _parse_ranked_items(generated, "Procedures")
+    def _postprocess_generated(self, raw: str) -> str:
+        if not raw.strip().startswith("Diagnoses:"):
+            return "Diagnoses:\n1. " + raw.lstrip()
+        return raw
 
-        diag_precision: dict[int, float] = {}
-        diag_recall: dict[int, float] = {}
-        proc_precision: dict[int, float] = {}
-        proc_recall: dict[int, float] = {}
-        for k in range(1, 6):
-            p, r = _judge_precision_recall_at_k(
-                predicted_diags,
-                case.diagnoses,
-                k,
-                judge=self.judge,
-                patient_context=case.context,
-                label="diagnosis",
-            )
-            diag_precision[k] = p
-            diag_recall[k] = r
-            p2, r2 = _judge_precision_recall_at_k(
-                predicted_procs,
-                case.procedures,
-                k,
-                judge=self.judge,
-                patient_context=case.context,
-                label="procedure",
-            )
-            proc_precision[k] = p2
-            proc_recall[k] = r2
-
-        return PromptPrediction(
-            subject_id=case.subject_id,
-            hadm_id=case.hadm_id,
-            generated_text=generated,
-            prompt=prompt,
-            predicted_diagnoses=predicted_diags,
-            predicted_procedures=predicted_procs,
-            ground_truth_diagnoses=list(case.diagnoses),
-            ground_truth_procedures=list(case.procedures),
-            diagnoses_precision_at_k=diag_precision,
-            diagnoses_recall_at_k=diag_recall,
-            procedures_precision_at_k=proc_precision,
-            procedures_recall_at_k=proc_recall,
-        )
-
-    def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
-        """Predict diagnoses and procedures for multiple cases with batched LLM calls."""
-
-        if not cases:
-            return []
-
-        prompts = [self._build_prompt(case) for case in cases]
-        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
-
-        predictions: List[PromptPrediction] = []
-        for case, prompt, generated in zip(cases, prompts, generations):
-            generated = "Diagnoses:\n1. " + generated
-            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-            predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-            diag_precision: dict[int, float] = {}
-            diag_recall: dict[int, float] = {}
-            proc_precision: dict[int, float] = {}
-            proc_recall: dict[int, float] = {}
-            for k in range(1, 6):
-                p, r = _judge_precision_recall_at_k(
-                    predicted_diags,
-                    case.diagnoses,
-                    k,
-                    judge=self.judge,
-                    patient_context=case.context,
-                    label="diagnosis",
-                )
-                diag_precision[k] = p
-                diag_recall[k] = r
-                p2, r2 = _judge_precision_recall_at_k(
-                    predicted_procs,
-                    case.procedures,
-                    k,
-                    judge=self.judge,
-                    patient_context=case.context,
-                    label="procedure",
-                )
-                proc_precision[k] = p2
-                proc_recall[k] = r2
-
-            predictions.append(
-                PromptPrediction(
-                    subject_id=case.subject_id,
-                    hadm_id=case.hadm_id,
-                    generated_text=generated,
-                    prompt=prompt,
-                    predicted_diagnoses=predicted_diags,
-                    predicted_procedures=predicted_procs,
-                    ground_truth_diagnoses=list(case.diagnoses),
-                    ground_truth_procedures=list(case.procedures),
-                    diagnoses_precision_at_k=diag_precision,
-                    diagnoses_recall_at_k=diag_recall,
-                    procedures_precision_at_k=proc_precision,
-                    procedures_recall_at_k=proc_recall,
-                )
-            )
-
-        return predictions
-
-
-class RAGPredictor:
+class RAGPredictor(BasePredictor):
     """Patient-note predictor that augments prompts with retrieved clinical knowledge."""
 
     def __init__(
@@ -583,15 +594,15 @@ class RAGPredictor:
         self.retriever = SemanticRetriever(self.store)
         self.top_k = top_k
 
-        self.generator = PromptOnlyGenerator(
-            model_name=model_name or DEFAULT_MODEL_NAME,
+        # Initialize the base class (generator + judge)
+        super().__init__(
+            model_name=model_name,
             generation_kwargs=generation_kwargs,
             text_pipeline=text_pipeline,
-        )
-        self.judge: AnswerJudge = answer_judge or LLMAnswerJudge(
-            model_name=judge_model_name or model_name or DEFAULT_MODEL_NAME,
-            generation_kwargs=judge_generation_kwargs,
-            text_pipeline=judge_pipeline,
+            answer_judge=answer_judge,
+            judge_model_name=judge_model_name,
+            judge_generation_kwargs=judge_generation_kwargs,
+            judge_pipeline=judge_pipeline,
         )
 
     def _format_evidence(self, retrieved: Sequence[Document]) -> str:
@@ -604,120 +615,38 @@ class RAGPredictor:
             ]
         )
 
-    def _build_prompt(
-        self, case: PatientCase, retrieved: Sequence[Document]
-    ) -> str:
-        knowledge_block = self._format_evidence(retrieved)
+    def _build_prompt(self, case: PatientCase) -> str:
+        cleaned_context = clean_patient_information(case.context)
+        # RAG-specific: retrieve documents and embed them into the prompt
+        retrieved_items = self.retriever.retrieve(case.context, top_k=self.top_k)
+        retrieved_docs = [item.document for item in retrieved_items]
+        knowledge_block = self._format_evidence(retrieved_docs)
+
         return (
-            "You are a clinical assistant. Read the patient information and use the provided clinical knowledge to "
-            "propose the most likely diagnoses and procedures. List the top 5 diagnoses followed by the top 5 procedures.\n\n"
-            f"Patient information:\n{case.context}\n\n"
+            "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
+            "cardiovascular disease using current evidence-based guidelines.\n\n"
+            "Read the patient information and identify the most likely *cardiac* diagnoses and the most "
+            "appropriate *cardiology-related* procedures.\n"
+            "- Prioritize cardiovascular conditions (ischemic heart disease, arrhythmias, heart failure, "
+            "valvular disease, cardiomyopathies, pericardial disease, pulmonary hypertension, etc.).\n"
+            "- Rank diagnoses from most to least likely based on the clinical data.\n"
+            "- Focus on concise, guideline-aligned procedure recommendations (e.g., ECG, troponins, "
+            "echocardiography, stress testing, cath/PCI, advanced imaging).\n"
+            "- Use short, clinical phrases only. Do not add explanations or extra sections.\n\n"
+            f"Patient information:\n{cleaned_context}\n\n"
             f"Retrieved clinical knowledge:\n{knowledge_block}\n\n"
-            "Format:\n"
+            "Format (exactly):\n"
             "Diagnoses:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Procedures:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "Diagnoses:\n1."
         )
-
-    def predict(self, case: PatientCase) -> PromptPrediction:
-        retrieved = self.retriever.retrieve(case.context, top_k=self.top_k)
-        prompt = self._build_prompt(case, [item.document for item in retrieved])
-        generated = self.generator.generate(prompt)
-
-        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-        predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-        diag_precision, diag_recall = _judge_precision_recall(
-            predicted_diags,
-            case.diagnoses,
-            judge=self.judge,
-            patient_context=case.context,
-            label="diagnosis",
-            max_k=5,
-        )
-        proc_precision, proc_recall = _judge_precision_recall(
-            predicted_procs,
-            case.procedures,
-            judge=self.judge,
-            patient_context=case.context,
-            label="procedure",
-            max_k=5,
-        )
-
-        return PromptPrediction(
-            hadm_id=case.hadm_id,
-            generated_text=generated,
-            prompt=prompt,
-            predicted_diagnoses=predicted_diags,
-            predicted_procedures=predicted_procs,
-            ground_truth_diagnoses=list(case.diagnoses),
-            ground_truth_procedures=list(case.procedures),
-            diagnoses_precision_at_k=diag_precision,
-            diagnoses_recall_at_k=diag_recall,
-            procedures_precision_at_k=proc_precision,
-            procedures_recall_at_k=proc_recall,
-        )
-
-    def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
-        if not cases:
-            return []
-
-        retrieved_lists = [self.retriever.retrieve(case.context, top_k=self.top_k) for case in cases]
-        prompts = [self._build_prompt(case, [item.document for item in retrieved]) for case, retrieved in zip(cases, retrieved_lists)]
-        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
-
-        predictions: List[PromptPrediction] = []
-        for case, prompt, generated in zip(cases, prompts, generations):
-            generated = "Diagnoses:\n1. " + generated
-            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-            predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-            diag_precision: dict[int, float] = {}
-            diag_recall: dict[int, float] = {}
-            proc_precision: dict[int, float] = {}
-            proc_recall: dict[int, float] = {}
-            for k in range(1, 6):
-                p, r = _judge_precision_recall_at_k(
-                    predicted_diags,
-                    case.diagnoses,
-                    k,
-                    judge=self.judge,
-                    patient_context=case.context,
-                    label="diagnosis",
-                )
-                diag_precision[k] = p
-                diag_recall[k] = r
-                p2, r2 = _judge_precision_recall_at_k(
-                    predicted_procs,
-                    case.procedures,
-                    k,
-                    judge=self.judge,
-                    patient_context=case.context,
-                    label="procedure",
-                )
-                proc_precision[k] = p2
-                proc_recall[k] = r2
-
-            predictions.append(
-                PromptPrediction(
-                    subject_id=case.subject_id,
-                    hadm_id=case.hadm_id,
-                    generated_text=generated,
-                    prompt=prompt,
-                    predicted_diagnoses=predicted_diags,
-                    predicted_procedures=predicted_procs,
-                    ground_truth_diagnoses=list(case.diagnoses),
-                    ground_truth_procedures=list(case.procedures),
-                    diagnoses_precision_at_k=diag_precision,
-                    diagnoses_recall_at_k=diag_recall,
-                    procedures_precision_at_k=proc_precision,
-                    procedures_recall_at_k=proc_recall,
-                )
-            )
-
-        return predictions
-
+    
+    def _postprocess_generated(self, raw: str) -> str:
+        if not raw.strip().startswith("Diagnoses:"):
+            return "Diagnoses:\n1. " + raw.lstrip()
+        return raw
 
 def summarise_predictions(predictions: Iterable[PromptPrediction]) -> dict[str, float]:
     totals: MutableMapping[str, float] = {}
@@ -745,6 +674,5 @@ __all__ = [
     "PromptingPredictor",
     "RAGPredictor",
     "load_patient_cases",
-    "patient_cases_to_rag_queries",
     "summarise_predictions",
 ]
