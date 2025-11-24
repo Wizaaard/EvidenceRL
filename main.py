@@ -18,8 +18,11 @@ from evidence_rl import (
     PromptingPredictor,
     RagRlPipeline,
     RagRlResult,
+    export_documents_jsonl,
     load_cardiac_icd_documents,
+    load_documents_from_jsonl,
     load_patient_cases,
+    load_pdf_knowledge_documents,
     summarise_predictions,
 )  # noqa: E402
 
@@ -163,6 +166,34 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Batch size for prompt-only baseline generation (for GPU efficiency).",
+    )
+    parser.add_argument(
+        "--knowledge-path",
+        default=None,
+        help=(
+            "Optional directory containing clinical guideline PDFs (or .txt files). "
+            "When provided, the RAG demo will chunk these into retrievable documents."
+        ),
+    )
+    parser.add_argument(
+        "--knowledge-jsonl",
+        default=None,
+        help=(
+            "Optional JSONL path for knowledge chunks. If the file exists it will be loaded; "
+            "otherwise the processed chunks from --knowledge-path will be exported there."
+        ),
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=400,
+        help="Token-ish chunk size for guideline ingestion when using --knowledge-path.",
+    )
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=80,
+        help="Overlap between chunks for guideline ingestion when using --knowledge-path.",
     )
     parser.add_argument(
         "--judge-model-name",
@@ -320,7 +351,19 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     documents: List[Document]
-    if args.data_path:
+    knowledge_jsonl_path = Path(args.knowledge_jsonl) if args.knowledge_jsonl else None
+    if knowledge_jsonl_path and knowledge_jsonl_path.exists():
+        documents = load_documents_from_jsonl(knowledge_jsonl_path)
+    elif args.knowledge_path:
+        documents = load_pdf_knowledge_documents(
+            args.knowledge_path,
+            chunk_size=args.chunk_size,
+            overlap=args.chunk_overlap,
+        )
+        if knowledge_jsonl_path:
+            export_documents_jsonl(documents, knowledge_jsonl_path)
+            print(f"Exported chunked knowledge to {knowledge_jsonl_path.resolve()}")
+    elif args.data_path:
         documents = load_cardiac_icd_documents(args.data_path)
     else:
         documents = CARDIAC_DOCUMENTS

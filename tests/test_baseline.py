@@ -56,10 +56,21 @@ def test_parse_ranked_items_extracts_lists():
 class StubJudge:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
+        self.batch_calls: list[list[tuple[str, str, str]]] = []
 
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:  # type: ignore[override]
         self.calls.append((query, answer, ground_truth))
         return answer.split()[0].lower() == ground_truth.split()[0].lower()
+
+    def is_correct_batch(
+        self,
+        queries: list[str],
+        answers: list[str],
+        ground_truths: list[str],
+    ) -> list[bool]:  # type: ignore[override]
+        triplets = list(zip(queries, answers, ground_truths))
+        self.batch_calls.append(triplets)
+        return [self.is_correct(q, a, g) for q, a, g in triplets]
 
 
 def test_judge_precision_recall_at_k_uses_llm_judge():
@@ -173,4 +184,4 @@ def test_predict_many_batches_prompts(tmp_path: Path):
     assert len(predictions) == 2
     assert len(pipeline_calls) == 1
     assert pipeline_calls[0][1] == 2
-    assert judge.calls, "judge should still score predictions in batched mode"
+    assert judge.batch_calls, "judge should batch score predictions when available"

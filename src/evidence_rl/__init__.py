@@ -8,6 +8,13 @@ from .baseline import (
     summarise_predictions,
 )
 from .documents import CARDIAC_ICD_PREFIXES, Document, RetrievedDocument, load_cardiac_icd_documents
+from .ingestion import (
+    KnowledgeChunk,
+    chunk_guideline_text,
+    export_documents_jsonl,
+    load_documents_from_jsonl,
+    load_pdf_knowledge_documents,
+)
 from .evaluation import AnswerJudge, LLMAnswerJudge
 from .generation import HuggingFaceGenerator
 from .retrieval import DocumentStore, SemanticRetriever
@@ -18,6 +25,11 @@ __all__ = [
     "Document",
     "RetrievedDocument",
     "load_cardiac_icd_documents",
+    "KnowledgeChunk",
+    "chunk_guideline_text",
+    "export_documents_jsonl",
+    "load_documents_from_jsonl",
+    "load_pdf_knowledge_documents",
     "PatientCase",
     "PromptPrediction",
     "PromptingPredictor",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol
+from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol, Sequence
 
 from .generation import DEFAULT_MODEL_NAME
 
@@ -13,6 +13,23 @@ class AnswerJudge(Protocol):
 
     def is_correct(self, query: str, answer: str, ground_truth: str) -> bool:
         """Return ``True`` when ``answer`` sufficiently matches ``ground_truth``."""
+
+    def is_correct_batch(
+        self,
+        queries: Sequence[str],
+        answers: Sequence[str],
+        ground_truths: Sequence[str],
+    ) -> list[bool]:
+        """Return correctness booleans for each (query, answer, ground_truth) triple.
+
+        Implementations may override this for more efficient batched grading. A
+        default, sequential implementation is provided for classes that do not
+        override the method explicitly.
+        """
+        return [
+            self.is_correct(query=query, answer=answer, ground_truth=ground_truth)
+            for query, answer, ground_truth in zip(queries, answers, ground_truths)
+        ]
 
 
 @dataclass
@@ -126,9 +143,30 @@ class LLMAnswerJudge:
         prompt = self._build_prompt(query, answer, ground_truth)
         self.last_prompt = prompt
         outputs = self._pipeline(prompt, **self._generation_kwargs)
-        verdict = self._extract_verdict(outputs, prompt).strip().lower()
-        return verdict.startswith("true")
+        verdict = self._extract_verdict(outputs, prompt)
+        self.last_answer = verdict
+        return verdict.startswith("correct")
 
+    def is_correct_batch(
+        self,
+        queries: Sequence[str],
+        answers: Sequence[str],
+        ground_truths: Sequence[str],
+    ) -> list[bool]:
+        if not (len(queries) == len(answers) == len(ground_truths)):
+            raise ValueError("queries, answers, and ground_truths must be the same length")
+
+        prompts = [self._build_prompt(q, a, g) for q, a, g in zip(queries, answers, ground_truths)]
+        self.last_prompt = prompts[-1] if prompts else None
+        outputs = self._pipeline(prompts, **self._generation_kwargs)
+
+        verdicts: list[str] = []
+        for prompt, output in zip(prompts, outputs):
+            prompt_outputs = output if isinstance(output, list) else [output]
+            verdicts.append(self._extract_verdict(prompt_outputs, prompt))
+
+        self.last_answer = verdicts[-1] if verdicts else None
+        return [verdict.startswith("correct") for verdict in verdicts]
 
 
 __all__ = ["AnswerJudge", "LLMAnswerJudge"]

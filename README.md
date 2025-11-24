@@ -88,6 +88,34 @@ the corpus and feed it directly into `RagRlPipeline`. The loader preserves ICD
 codes and representative titles in document metadata so the concept-aware
 retriever remains effective against the real knowledge base.
 
+### RAG baseline with clinical guideline PDFs
+
+If you maintain a folder of guideline PDFs (or `.txt` exports) under
+`Medical_Knowledge/`, you can use it as the RAG knowledge base instead of the
+toy ICD corpus. The ingestion helpers read each file, detect section/subsection
+headings, chunk the content, and optionally persist the chunks as JSONL for
+later reuse:
+
+```bash
+python main.py \
+  --knowledge-path /path/to/Medical_Knowledge \
+  --knowledge-jsonl /tmp/knowledge.jsonl \
+  --chunk-size 400 --chunk-overlap 80
+```
+
+If `--knowledge-jsonl` already exists, the chunks are loaded directly; if not,
+the processed chunks are exported to that path for future runs. You can also use
+the building blocks programmatically:
+
+```python
+from evidence_rl import load_pdf_knowledge_documents, export_documents_jsonl
+docs = load_pdf_knowledge_documents("/path/to/Medical_Knowledge", chunk_size=400, overlap=80)
+export_documents_jsonl(docs, "knowledge.jsonl")
+```
+
+The resulting documents can be fed into `DocumentStore` for embedding and
+retrieval or supplied directly to `RagRlPipeline`.
+
 ### Prompt-only baseline on patient notes
 
 For a lightweight baseline that avoids retrieval entirely, you can point the
