@@ -98,9 +98,15 @@ later reuse:
 
 ```bash
 python main.py \
+  --model-name /path/to/model_name \
+  --judge-model-name /path/to/judge_model_name \
+  --patient-data-path /path/to/patient_data \
+  --patient-pipeline rag \
   --knowledge-path /path/to/Medical_Knowledge \
   --knowledge-jsonl /tmp/knowledge.jsonl \
-  --chunk-size 400 --chunk-overlap 80
+  --chunk-size 400 --chunk-overlap 80 \
+  --max-patients 10 \
+  --json-output /path/to/json_output
 ```
 
 If `--knowledge-jsonl` already exists, the chunks are loaded directly; if not,
