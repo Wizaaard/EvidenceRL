@@ -145,7 +145,7 @@ class LLMAnswerJudge:
         outputs = self._pipeline(prompt, **self._generation_kwargs)
         verdict = self._extract_verdict(outputs, prompt)
         self.last_answer = verdict
-        return verdict.startswith("correct")
+        return verdict.startswith("true")
 
     def is_correct_batch(
         self,
@@ -166,7 +166,7 @@ class LLMAnswerJudge:
             verdicts.append(self._extract_verdict(prompt_outputs, prompt))
 
         self.last_answer = verdicts[-1] if verdicts else None
-        return [verdict.startswith("correct") for verdict in verdicts]
+        return [verdict.startswith("true") for verdict in verdicts]
 
 
 __all__ = ["AnswerJudge", "LLMAnswerJudge"]
