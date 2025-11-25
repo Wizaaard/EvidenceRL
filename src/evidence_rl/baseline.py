@@ -166,6 +166,7 @@ def _judge_precision_recall(
                 "  or 'stable angina' vs 'NSTEMI').\n"
                 "- Ignore differences in word order, punctuation, or capitalization.\n\n"
             )
+            queries.append(query)
             answers.append(pred)
             ground_truths.append(truth_item)
 
