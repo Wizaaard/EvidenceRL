@@ -130,6 +130,8 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
     assert prediction.procedures_precision_at_k[2] == 1.0
     assert prediction.ground_truth_diagnoses == ["Acute MI", "Heart failure"]
     assert prediction.ground_truth_procedures == ["Cardiac catheterization", "Echocardiogram"]
+    assert prediction.diagnoses_judge_verdicts[:2] == [True, True]
+    assert prediction.procedures_judge_verdicts[:2] == [True, True]
     assert text_calls, "prompt should be sent to pipeline"
     assert judge.calls, "judge should score the predictions"
 
@@ -142,6 +144,8 @@ def test_prompting_predictor_end_to_end(tmp_path: Path):
         "Cardiac catheterization",
         "Echocardiogram",
     ]
+    assert loaded["diagnoses_judge_verdicts"][:2] == [True, True]
+    assert loaded["procedures_judge_verdicts"][:2] == [True, True]
 
 
 def test_predict_many_batches_prompts(tmp_path: Path):
@@ -189,6 +193,7 @@ def test_predict_many_batches_prompts(tmp_path: Path):
     assert len(pipeline_calls) == 1
     assert pipeline_calls[0][1] == 2
     assert judge.batch_calls, "judge should batch score predictions when available"
+    assert all(pred.diagnoses_judge_verdicts for pred in predictions)
 
 
 def test_patient_cases_to_rag_queries_includes_truth(tmp_path):
@@ -259,3 +264,4 @@ def test_rag_predictor_augments_prompts_with_retrieval(tmp_path: Path):
     assert prediction.predicted_diagnoses[0] == "Unstable angina"
     assert prediction.diagnoses_precision_at_k[1] == 1.0
     assert judge.calls, "Judge should evaluate predictions"
+    assert prediction.diagnoses_judge_verdicts[0] is True

@@ -113,21 +113,45 @@ def _judge_precision_recall_at_k(
 ) -> tuple[float, float]:
     """LLM-judged precision/recall at *k* for diagnoses or procedures."""
 
-    if k <= 0:
-        raise ValueError("k must be positive")
-    preds = list(predicted[:k])
-    remaining_truth = [item for item in truth if item]
-    if not preds:
-        return 0.0, 0.0
-    if not remaining_truth:
-        return 0.0, 0.0
+    precision_by_k, recall_by_k, _ = _judge_precision_recall(
+        predicted=predicted,
+        truth=truth,
+        judge=judge,
+        patient_context=patient_context,
+        label=label,
+        max_k=k,
+    )
+    return precision_by_k.get(k, 0.0), recall_by_k.get(k, 0.0)
 
-    hits = 0
-    used: set[int] = set()
+
+def _judge_precision_recall(
+    predicted: Sequence[str],
+    truth: Sequence[str],
+    judge: AnswerJudge,
+    patient_context: str,
+    label: str,
+    max_k: int = 5,
+) -> tuple[dict[int, float], dict[int, float], list[bool]]:
+    """LLM-judged precision/recall up to *max_k* using batched scoring when available.
+
+    Returns precision/recall dictionaries and a verdict list indicating whether each
+    predicted item (up to *max_k*) matched at least one ground-truth label.
+    """
+
+    if max_k <= 0:
+        raise ValueError("max_k must be positive")
+
+    preds = list(predicted[:max_k])
+    truths = [item for item in truth if item]
+    if not preds or not truths:
+        zeros = {k: 0.0 for k in range(1, max_k + 1)}
+        return zeros, zeros, [False for _ in preds]
+
+    queries: list[str] = []
+    answers: list[str] = []
+    ground_truths: list[str] = []
     for pred in preds:
-        for idx, truth_item in enumerate(remaining_truth):
-            if idx in used:
-                continue
+        for truth_item in truths:
             query = (
                 f"Does the candidate {label} match the ground truth {label}?\n"
                 "Decide whether the candidate semantically matches the ground truth, "
@@ -142,14 +166,50 @@ def _judge_precision_recall_at_k(
                 "  or 'stable angina' vs 'NSTEMI').\n"
                 "- Ignore differences in word order, punctuation, or capitalization.\n\n"
             )
-            if judge.is_correct(query=query, answer=pred, ground_truth=truth_item):
-                hits += 1
-                used.add(idx)
+            answers.append(pred)
+            ground_truths.append(truth_item)
+
+    if hasattr(judge, "is_correct_batch"):
+        results = judge.is_correct_batch(queries, answers, ground_truths)
+    else:
+        results = [
+            judge.is_correct(query=q, answer=a, ground_truth=g)
+            for q, a, g in zip(queries, answers, ground_truths)
+        ]
+
+    match_matrix = [[False for _ in truths] for _ in preds]
+    idx = 0
+    for pred_idx in range(len(preds)):
+        for truth_idx in range(len(truths)):
+            match_matrix[pred_idx][truth_idx] = results[idx]
+            idx += 1
+
+    hits_by_pred: list[int] = []
+    used_truths: set[int] = set()
+    for pred_idx, row in enumerate(match_matrix):
+        for truth_idx, is_match in enumerate(row):
+            if truth_idx in used_truths:
+                continue
+            if is_match:
+                hits_by_pred.append(pred_idx)
+                used_truths.add(truth_idx)
                 break
 
-    precision = hits / len(preds)
-    recall = hits / len(remaining_truth)
-    return precision, recall
+    precision_by_k: dict[int, float] = {}
+    recall_by_k: dict[int, float] = {}
+    for k in range(1, max_k + 1):
+        considered = min(k, len(preds))
+        if considered == 0:
+            precision_by_k[k] = 0.0
+            recall_by_k[k] = 0.0
+            continue
+        hits = sum(1 for pred_idx in hits_by_pred if pred_idx < k)
+        precision_by_k[k] = hits / considered
+        recall_by_k[k] = hits / len(truths)
+
+    verdicts = [idx in hits_by_pred for idx in range(len(preds))]
+
+    return precision_by_k, recall_by_k, verdicts
 
 
 @dataclass
@@ -176,6 +236,8 @@ class PromptPrediction:
     diagnoses_recall_at_k: dict[int, float]
     procedures_precision_at_k: dict[int, float]
     procedures_recall_at_k: dict[int, float]
+    diagnoses_judge_verdicts: List[bool]
+    procedures_judge_verdicts: List[bool]
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -191,6 +253,8 @@ class PromptPrediction:
             "diagnoses_recall_at_k": self.diagnoses_recall_at_k,
             "procedures_precision_at_k": self.procedures_precision_at_k,
             "procedures_recall_at_k": self.procedures_recall_at_k,
+            "diagnoses_judge_verdicts": self.diagnoses_judge_verdicts,
+            "procedures_judge_verdicts": self.procedures_judge_verdicts,
         }
 
 
@@ -437,35 +501,24 @@ class BasePredictor(ABC):
         predicted_procs: Sequence[str],
     ) -> tuple[dict[int, float], dict[int, float], dict[int, float], dict[int, float]]:
         """Compute precision/recall@k for diagnoses and procedures."""
-        diag_precision: dict[int, float] = {}
-        diag_recall: dict[int, float] = {}
-        proc_precision: dict[int, float] = {}
-        proc_recall: dict[int, float] = {}
+        diag_precision, diag_recall, diag_verdicts = _judge_precision_recall(
+            predicted_diags,
+            case.diagnoses,
+            judge=self.judge,
+            patient_context=case.context,
+            label="diagnosis",
+            max_k=5,
+        )
+        proc_precision, proc_recall, proc_verdicts = _judge_precision_recall(
+            predicted_procs,
+            case.procedures,
+            judge=self.judge,
+            patient_context=case.context,
+            label="procedure",
+            max_k=5,
+        )
 
-        for k in range(1, 6):
-            p, r = _judge_precision_recall_at_k(
-                predicted_diags,
-                case.diagnoses,
-                k,
-                judge=self.judge,
-                patient_context=case.context,
-                label="diagnosis",
-            )
-            diag_precision[k] = p
-            diag_recall[k] = r
-
-            p2, r2 = _judge_precision_recall_at_k(
-                predicted_procs,
-                case.procedures,
-                k,
-                judge=self.judge,
-                patient_context=case.context,
-                label="procedure",
-            )
-            proc_precision[k] = p2
-            proc_recall[k] = r2
-
-        return diag_precision, diag_recall, proc_precision, proc_recall
+        return diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts
 
     def predict(self, case: PatientCase) -> PromptPrediction:
         prompt = self._build_prompt(case)
@@ -475,9 +528,10 @@ class BasePredictor(ABC):
         predicted_diags = _parse_ranked_items(generated, "Diagnoses")
         predicted_procs = _parse_ranked_items(generated, "Procedures")
 
-        diag_precision, diag_recall, proc_precision, proc_recall = self._score_predictions(
+        diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts = self._score_predictions(
             case, predicted_diags, predicted_procs
         )
+       
 
         return PromptPrediction(
             subject_id=getattr(case, "subject_id", None),
@@ -492,9 +546,13 @@ class BasePredictor(ABC):
             diagnoses_recall_at_k=diag_recall,
             procedures_precision_at_k=proc_precision,
             procedures_recall_at_k=proc_recall,
+            diagnoses_judge_verdicts=diag_verdicts,
+            procedures_judge_verdicts=proc_verdicts,
         )
 
     def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
+        """Predict diagnoses and procedures for multiple cases with batched LLM calls."""
+
         if not cases:
             return []
 
@@ -508,7 +566,7 @@ class BasePredictor(ABC):
             predicted_diags = _parse_ranked_items(generated, "Diagnoses")
             predicted_procs = _parse_ranked_items(generated, "Procedures")
 
-            diag_precision, diag_recall, proc_precision, proc_recall = self._score_predictions(
+            diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts = self._score_predictions(
                 case, predicted_diags, predicted_procs
             )
 
@@ -526,6 +584,8 @@ class BasePredictor(ABC):
                     diagnoses_recall_at_k=diag_recall,
                     procedures_precision_at_k=proc_precision,
                     procedures_recall_at_k=proc_recall,
+                    diagnoses_judge_verdicts=diag_verdicts,
+                    procedures_judge_verdicts=proc_verdicts,
                 )
             )
         return predictions
