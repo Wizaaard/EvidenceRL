@@ -676,13 +676,54 @@ class RAGPredictor(BasePredictor):
             ]
         )
 
-    def _build_prompt(self, case: PatientCase) -> str:
-        cleaned_context = clean_patient_information(case.context)
-        # RAG-specific: retrieve documents and embed them into the prompt
-        retrieved_items = self.retriever.retrieve(case.context, top_k=self.top_k)
-        retrieved_docs = [item.document for item in retrieved_items]
-        knowledge_block = self._format_evidence(retrieved_docs)
+    def _extract_section_queries(self, context: str) -> List[str]:
+        """Return patient sections that should drive retrieval."""
 
+        if not context.strip():
+            return []
+
+        queries: List[str] = []
+        lines = [line.strip() for line in context.splitlines() if line.strip()]
+        for label, _key in _PATIENT_SECTIONS:
+            prefix = f"{label}:"
+            for line in lines:
+                if line.lower().startswith(prefix.lower()):
+                    value = line.split(":", 1)[1].strip()
+                    if value:
+                        queries.append(value)
+                    break
+
+        if not queries:
+            queries.append(context)
+
+        return queries
+
+    def _retrieve_evidence(self, context: str) -> List[Document]:
+        """Retrieve and rank evidence across patient sections."""
+
+        section_queries = self._extract_section_queries(context)
+        if not section_queries:
+            return []
+
+        best_hits: MutableMapping[str, float] = {}
+        docs_by_id: MutableMapping[str, Document] = {}
+
+        for query in section_queries:
+            hits = self.retriever.retrieve(query, top_k=self.top_k)
+            for hit in hits:
+                doc_id = hit.document.doc_id
+                if doc_id not in best_hits or hit.score > best_hits[doc_id]:
+                    best_hits[doc_id] = hit.score
+                    docs_by_id[doc_id] = hit.document
+
+        ranked = sorted(best_hits.items(), key=lambda item: item[1], reverse=True)
+        top_ids = [doc_id for doc_id, _ in ranked[: self.top_k]]
+        return [docs_by_id[doc_id] for doc_id in top_ids]
+
+    def _build_prompt(
+        self, case: PatientCase, retrieved: Sequence[Document]
+    ) -> str:
+        knowledge_block = self._format_evidence(retrieved)
         return (
             "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
             "cardiovascular disease using current evidence-based guidelines.\n\n"

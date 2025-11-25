@@ -141,8 +141,8 @@ Use `--max-patients` to subsample cases when experimenting locally. To maximise
 GPU utilisation, the baseline batches prompts through the generator using a
 dataset-style call; tune `--batch-size` to suit your hardware. The JSON payload
 captures the exact prompt, generated text, per-case metrics, the ground-truth
-diagnoses/procedures used for judging, and an aggregate precision/recall
-summary.
+diagnoses/procedures used for judging, the judge verdicts for each predicted
+diagnosis/procedure, and an aggregate precision/recall summary.
 
 If you want to keep the patient-note prompts but add retrieval from your
 clinical guideline corpus, switch to the RAG pipeline with `--patient-pipeline

@@ -14,7 +14,7 @@ from evidence_rl.baseline import (
     load_patient_cases,
     patient_cases_to_rag_queries,
 )
-from evidence_rl.documents import Document
+from evidence_rl.documents import Document, RetrievedDocument
 
 
 def test_textualise_patient_includes_sections():
@@ -265,3 +265,72 @@ def test_rag_predictor_augments_prompts_with_retrieval(tmp_path: Path):
     assert prediction.diagnoses_precision_at_k[1] == 1.0
     assert judge.calls, "Judge should evaluate predictions"
     assert prediction.diagnoses_judge_verdicts[0] is True
+
+
+def test_rag_predictor_ranks_sections_before_prompting():
+    documents = [
+        Document(doc_id="guideline-1", text="General cardiology guidance."),
+        Document(doc_id="guideline-2", text="Chest pain management advice."),
+        Document(doc_id="guideline-3", text="Dyspnea evaluation steps."),
+    ]
+
+    class StubRetriever:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def retrieve(self, query: str, top_k: int = 5):  # type: ignore[override]
+            self.calls.append(query)
+            if "chest pain" in query:
+                return [
+                    RetrievedDocument(documents[0], 0.4),
+                    RetrievedDocument(documents[1], 0.8),
+                ]
+            return [
+                RetrievedDocument(documents[1], 0.6),
+                RetrievedDocument(documents[2], 0.9),
+            ]
+
+    pipeline_calls: list[str] = []
+
+    def fake_generator(prompts, **_: object):  # type: ignore[override]
+        pipeline_calls.extend(prompts if isinstance(prompts, list) else [prompts])
+        return [
+            {
+                "generated_text": (
+                    "Diagnoses:\n1. Heart failure\n2. --\n"
+                    "Procedures:\n1. Chest X-ray\n2. --"
+                )
+            }
+        ]
+
+    judge = StubJudge()
+    predictor = RAGPredictor(
+        documents,
+        top_k=2,
+        text_pipeline=fake_generator,
+        answer_judge=judge,
+    )
+    retriever = StubRetriever()
+    predictor.retriever = retriever  # type: ignore[assignment]
+
+    case = PatientCase(
+        hadm_id="h1",
+        subject_id="s1",
+        note_id="n1",
+        context=(
+            "Chief complaint: chest pain radiating to jaw\n"
+            "History of present illness: progressive shortness of breath"
+        ),
+        diagnoses=["Heart failure"],
+        procedures=["Chest X-ray"],
+    )
+
+    prediction = predictor.predict(case)
+
+    assert retriever.calls == [
+        "chest pain radiating to jaw",
+        "progressive shortness of breath",
+    ]
+    assert "Dyspnea evaluation steps" in pipeline_calls[0]
+    assert pipeline_calls[0].index("Dyspnea") < pipeline_calls[0].index("Chest pain management advice")
+    assert prediction.predicted_diagnoses[0] == "Heart failure"
