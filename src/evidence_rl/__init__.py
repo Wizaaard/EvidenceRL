@@ -6,7 +6,6 @@ from .baseline import (
     PromptingPredictor,
     RAGPredictor,
     load_patient_cases,
-    patient_cases_to_rag_queries,
     summarise_predictions,
 )
 from .documents import CARDIAC_ICD_PREFIXES, Document, RetrievedDocument, load_cardiac_icd_documents
@@ -37,7 +36,6 @@ __all__ = [
     "PromptingPredictor",
     "RAGPredictor",
     "load_patient_cases",
-    "patient_cases_to_rag_queries",
     "summarise_predictions",
     "AnswerJudge",
     "LLMAnswerJudge",

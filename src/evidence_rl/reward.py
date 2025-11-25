@@ -21,7 +21,11 @@ def reward_overlap(pre_docs: Iterable[RetrievedDocument], post_docs: Iterable[Re
     post_ids = {doc.document.doc_id for doc in post_docs}
     if not pre_ids or not post_ids:
         return 0.0
-    return len(pre_ids & post_ids) / len(pre_ids)
+    # Calculate Jaccard similarity
+    intersection = len(pre_ids.intersection(post_ids))
+    union = len(pre_ids.union(post_ids))
+    jaccard_score = intersection / union
+    return jaccard_score
 
 
 def reward_embedding_similarity(

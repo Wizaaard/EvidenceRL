@@ -16,13 +16,13 @@ if str(SRC_PATH) not in sys.path:
 from evidence_rl import (
     Document,
     PromptingPredictor,
+    RAGPredictor,
     RagRlPipeline,
     RagRlResult,
     export_documents_jsonl,
     load_cardiac_icd_documents,
     load_documents_from_jsonl,
     load_patient_cases,
-    patient_cases_to_rag_queries,
     load_pdf_knowledge_documents,
     summarise_predictions,
 )  # noqa: E402
@@ -375,6 +375,7 @@ def main(argv: list[str] | None = None) -> None:
             output_path = Path(args.json_output)
             payload = {
                 "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
                 "predictions": [pred.to_dict() for pred in predictions],
                 "summary": summary,
             }
@@ -385,6 +386,34 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     documents = load_documents_from_args(args)
+    
+    if patient_cases and args.patient_pipeline == "rag":
+        predictor = RAGPredictor(
+            model_name=args.model_name,
+            judge_model_name=args.judge_model_name,
+            embedding_model_name=args.embedding_model_name,
+            documents=documents
+        )
+        predictions = predictor.predict_many(patient_cases, batch_size=args.batch_size)
+        summary = summarise_predictions(predictions)
+
+        print("Averaged precision/recall:")
+        for key, value in sorted(summary.items()):
+            print(f"  {key}: {value:.3f}")
+
+        if args.json_output:
+            output_path = Path(args.json_output)
+            payload = {
+                "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
+                "predictions": [pred.to_dict() for pred in predictions],
+                "summary": summary,
+            }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
+            print(f"Saved JSON results to {output_path.resolve()}")
+        return
 
     try:
         pipeline = RagRlPipeline(
@@ -411,8 +440,6 @@ def main(argv: list[str] | None = None) -> None:
             summary_path = output_path / "results.json"
 
     cases = SAMPLE_CASES
-    if patient_cases and args.patient_pipeline == "rag":
-        cases = patient_cases_to_rag_queries(patient_cases)
 
     results = run_cases(pipeline, cases, save_dir=per_case_dir)
 
