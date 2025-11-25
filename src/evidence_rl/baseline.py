@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Mapping, MutableMapping, Sequence
+from abc import ABC, abstractmethod
 
 from .generation import DEFAULT_MODEL_NAME, PromptOnlyGenerator
 from .evaluation import LLMAnswerJudge, AnswerJudge
@@ -151,9 +152,19 @@ def _judge_precision_recall(
     ground_truths: list[str] = []
     for pred in preds:
         for truth_item in truths:
-            queries.append(
-                f"Patient encounter:\n{patient_context}\n\n"
-                f"Does the candidate {label} match the gold standard {label}?"
+            query = (
+                f"Does the candidate {label} match the ground truth {label}?\n"
+                "Decide whether the candidate semantically matches the ground truth, "
+                "allowing for minor wording differences (e.g. synonyms, abbreviations) but not for "
+                "meaningful clinical differences.\n\n"
+                "Guidelines:\n"
+                "- Treat them as a TRUE if they refer to the same underlying clinical concept "
+                "  (e.g. 'acute decompensated heart failure' vs 'ADHF', or 'NSTEMI' vs "
+                "  'non-ST elevation myocardial infarction').\n"
+                "- Treat them as a FALSE if they differ in key clinical meaning, severity, "
+                "  acuity, or affected structure (e.g. 'mitral regurgitation' vs 'aortic stenosis', "
+                "  or 'stable angina' vs 'NSTEMI').\n"
+                "- Ignore differences in word order, punctuation, or capitalization.\n\n"
             )
             answers.append(pred)
             ground_truths.append(truth_item)
@@ -213,6 +224,7 @@ class PatientCase:
 
 @dataclass
 class PromptPrediction:
+    subject_id: str
     hadm_id: str
     generated_text: str
     prompt: str
@@ -229,6 +241,7 @@ class PromptPrediction:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "subject_id": self.subject_id,
             "hadm_id": self.hadm_id,
             "prompt": self.prompt,
             "generated_text": self.generated_text,
@@ -260,8 +273,13 @@ def load_patient_cases(data_path: str | Path, limit: int | None = None) -> List[
         hadm_id = row.get("hadm_id", "")
         if not hadm_id:
             continue
+        icd_code = (row.get("icd_code") or "").strip()
+        
+        # Only include diagnoses with ICD codes starting with "I"
+        if not icd_code.upper().startswith("I"):
+            continue
         bucket = diagnoses_by_hadm.setdefault(hadm_id, [])
-        bucket.append(row.get("long_title") or row.get("icd_code") or "")
+        bucket.append(row.get("long_title") or icd_code)
 
     procedures_by_hadm: MutableMapping[str, List[str]] = {}
     for row in _load_rows(proc_path):
@@ -300,44 +318,148 @@ def load_patient_cases(data_path: str | Path, limit: int | None = None) -> List[
         raise ValueError("No patient cases with ground-truth diagnoses or procedures were found.")
     return cases
 
-
-def patient_cases_to_rag_queries(cases: Iterable[PatientCase]) -> List[dict[str, str]]:
-    """Convert patient cases into RAG-friendly question/answer pairs."""
-
-    rag_cases: List[dict[str, str]] = []
-    for case in cases:
-        prompt = (
-            "You are a clinical assistant using external clinical guidelines. Based on the "
-            "patient encounter, list the top 5 most likely diagnoses followed by the top 5 "
-            "most appropriate procedures. Use concise bullet points.\n\n"
-            f"Patient information:\n{case.context}\n\n"
-            "Format:\n"
-            "Diagnoses:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-            "Procedures:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-        )
-
-        truth_segments: List[str] = []
-        if case.diagnoses:
-            truth_segments.append("Diagnoses: " + "; ".join(case.diagnoses))
-        if case.procedures:
-            truth_segments.append("Procedures: " + "; ".join(case.procedures))
-        ground_truth = "\n".join(truth_segments) if truth_segments else "No ground truth provided."
-
-        rag_cases.append(
-            {
-                "query": prompt,
-                "ground_truth": ground_truth,
-                "case_id": case.hadm_id,
-            }
-        )
-
-    return rag_cases
+def _normalize_newlines(text: str) -> str:
+    """Turn escaped \\n into real newlines and normalize CRLF."""
+    # If the string comes from a JSON / DB dump with literal "\n"
+    text = text.replace("\\n", "\n")
+    # Normalize Windows newlines
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text
 
 
-class PromptingPredictor:
-    """Prompt an LLM for diagnoses and procedures using textualised patient data."""
+def _remove_placeholders_and_list_artifacts(text: str) -> str:
+    """
+    Remove '___' placeholders and simple list artifacts like ['...'], ": ___, etc.
+    This is intentionally conservative so we don't eat real clinical content.
+    """
+    # Remove "___" placeholders, leaving a single space
+    text = re.sub(r"\b_+\b", " ", text)
+    
+    # Remove leading list wrappers like [' ... '] on single lines
+    # e.g. "X-ray: [': ___\nRight upper lobe...']" -> "X-ray:\nRight upper lobe..."
+    text = text.replace("[': ___", "")
+    text = text.replace("': ___", "")
+    text = text.replace('": ___', "")
+    text = text.replace("['", "")
+    text = text.replace("']", "")
+    text = text.replace('["', "")
+    text = text.replace('"]', "")
+
+    # Some weird combos like "___- PCI)" -> " PCI)"
+    text = re.sub(r"_+\s*-\s*", "", text)
+
+    return text
+
+def _remove_ids_and_diagnostic_sections(text: str) -> str:
+    """
+    Remove:
+    - ID header lines (note_id / subject_id / hadm_id)
+    - IMPRESSION: sections (any case)
+    - FINAL DIAGNOSIS: sections (any case)
+
+    Sections are removed from the header line through the next blank line
+    or end of text, to account for multi-line content.
+    """
+
+    # Drop any line that contains note_id / subject_id / hadm_id
+    text = re.sub(
+        r"(?im)^.*\b(note_id|subject_id|hadm_id)\s*:.*\n?",
+        "",
+        text,
+    )
+
+    # Remove IMPRESSION: and FINAL DIAGNOSIS: sections (multi-line)
+    # Handles variations like:
+    # "IMPRESSION:", "Impression :", "Final Diagnosis:", "FINAL DIAGNOSIS :"
+    section_pattern = re.compile(
+        r"^\s*(impression|final\s+diagnosis)\s*:.*?(?=\n\s*\n|^\S|\Z)",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    text = section_pattern.sub("", text)
+
+    return text
+
+def _cleanup_whitespace(text: str) -> str:
+    """Collapse multiple blank lines and excess internal spaces."""
+    # Strip trailing spaces at end of lines
+    text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+    # Collapse 3+ blank lines to max 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Collapse multiple spaces
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
+def _clean_ecg_machine_report_block(block: str) -> str:
+    """
+    Clean the 'ECG machine report:' line:
+    - split on ';'
+    - trim whitespace
+    - deduplicate phrases while keeping order
+    - drop empty items
+    """
+    # Get everything after the label
+    prefix = "ECG machine report:"
+    _, _, rest = block.partition(prefix)
+    rest = rest.strip()
+
+    # Split on semicolons that separate phrases
+    parts = [p.strip() for p in rest.split(";")]
+
+    seen = set()
+    unique_parts = []
+    for p in parts:
+        if not p:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        unique_parts.append(p)
+
+    cleaned = prefix + " " + "; ".join(unique_parts) + "."
+    return cleaned
+
+
+def _clean_ecg_machine_report(text: str) -> str:
+    """
+    Find 'ECG machine report:' and clean that line only.
+    Assumes the whole ECG report is on a single long logical line.
+    """
+    pattern = r"ECG machine report:[^\n]*"
+
+    def repl(match: re.Match) -> str:
+        block = match.group(0)
+        return _clean_ecg_machine_report_block(block)
+
+    return re.sub(pattern, repl, text)
+
+
+def clean_patient_information(raw: str) -> str:
+    """
+    Main entry point to clean raw patient information notes
+    (like your example) into a more readable, LLM-friendly form.
+    """
+    text = raw
+
+    # 1) Normalize newlines
+    text = _normalize_newlines(text)
+
+    # 2) Remove placeholders and list artifacts
+    text = _remove_placeholders_and_list_artifacts(text)
+
+    # 3) Remove IDs and diagnostic sections (IMPRESSION / FINAL DIAGNOSIS)
+    text = _remove_ids_and_diagnostic_sections(text)
+
+    # 4) Clean ECG machine report (deduplicate phrases)
+    text = _clean_ecg_machine_report(text)
+
+    # 5) Normalize whitespace
+    text = _cleanup_whitespace(text)
+
+    return text
+
+class BasePredictor(ABC):
+    """Base predictor for patient cases using an LLM and an AnswerJudge."""
 
     def __init__(
         self,
@@ -360,24 +482,25 @@ class PromptingPredictor:
             text_pipeline=judge_pipeline,
         )
 
+    @abstractmethod
     def _build_prompt(self, case: PatientCase) -> str:
-        return (
-            "You are a clinical assistant. Read the patient information and propose the most likely diagnoses "
-            "and procedures. List the top 5 diagnoses followed by the top 5 procedures. Use concise bullet points.\n\n"
-            f"Patient information:\n{case.context}\n\n"
-            "Format:\n"
-            "Diagnoses:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-            "Procedures:\n"
-            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
-        )
+        """Construct the LLM prompt for a given patient case."""
+        raise NotImplementedError
 
-    def predict(self, case: PatientCase) -> PromptPrediction:
-        prompt = self._build_prompt(case)
-        generated = self.generator.generate(prompt)
-        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-        predicted_procs = _parse_ranked_items(generated, "Procedures")
+    def _postprocess_generated(self, raw: str) -> str:
+        """
+        Optional hook to normalize the raw generation into a string that
+        `_parse_ranked_items` can consume. Default is identity.
+        """
+        return raw
 
+    def _score_predictions(
+        self,
+        case: PatientCase,
+        predicted_diags: Sequence[str],
+        predicted_procs: Sequence[str],
+    ) -> tuple[dict[int, float], dict[int, float], dict[int, float], dict[int, float]]:
+        """Compute precision/recall@k for diagnoses and procedures."""
         diag_precision, diag_recall, diag_verdicts = _judge_precision_recall(
             predicted_diags,
             case.diagnoses,
@@ -395,7 +518,23 @@ class PromptingPredictor:
             max_k=5,
         )
 
+        return diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts
+
+    def predict(self, case: PatientCase) -> PromptPrediction:
+        prompt = self._build_prompt(case)
+        generated_raw = self.generator.generate(prompt)
+        generated = self._postprocess_generated(generated_raw)
+
+        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
+        predicted_procs = _parse_ranked_items(generated, "Procedures")
+
+        diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts = self._score_predictions(
+            case, predicted_diags, predicted_procs
+        )
+       
+
         return PromptPrediction(
+            subject_id=getattr(case, "subject_id", None),
             hadm_id=case.hadm_id,
             generated_text=generated,
             prompt=prompt,
@@ -418,32 +557,22 @@ class PromptingPredictor:
             return []
 
         prompts = [self._build_prompt(case) for case in cases]
-        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
+        generations_raw = self.generator.generate_batch(prompts, batch_size=batch_size)
 
         predictions: List[PromptPrediction] = []
-        for case, prompt, generated in zip(cases, prompts, generations):
+        for case, prompt, generated_raw in zip(cases, prompts, generations_raw):
+            generated = self._postprocess_generated(generated_raw)
+
             predicted_diags = _parse_ranked_items(generated, "Diagnoses")
             predicted_procs = _parse_ranked_items(generated, "Procedures")
 
-            diag_precision, diag_recall, diag_verdicts = _judge_precision_recall(
-                predicted_diags,
-                case.diagnoses,
-                judge=self.judge,
-                patient_context=case.context,
-                label="diagnosis",
-                max_k=5,
-            )
-            proc_precision, proc_recall, proc_verdicts = _judge_precision_recall(
-                predicted_procs,
-                case.procedures,
-                judge=self.judge,
-                patient_context=case.context,
-                label="procedure",
-                max_k=5,
+            diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts = self._score_predictions(
+                case, predicted_diags, predicted_procs
             )
 
             predictions.append(
                 PromptPrediction(
+                    subject_id=getattr(case, "subject_id", None),
                     hadm_id=case.hadm_id,
                     generated_text=generated,
                     prompt=prompt,
@@ -459,11 +588,39 @@ class PromptingPredictor:
                     procedures_judge_verdicts=proc_verdicts,
                 )
             )
-
         return predictions
 
+class PromptingPredictor(BasePredictor):
+    """Prompt an LLM for cardiology diagnoses and procedures using textualised patient data."""
 
-class RAGPredictor:
+    def _build_prompt(self, case: PatientCase) -> str:
+        cleaned_context = clean_patient_information(case.context)
+        return (
+            "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
+            "cardiovascular disease using current evidence-based guidelines.\n\n"
+            "Read the patient information and identify the most likely *cardiac* diagnoses and the most "
+            "appropriate *cardiology-related* procedures.\n"
+            "- Prioritize cardiovascular conditions (ischemic heart disease, arrhythmias, heart failure, "
+            "valvular disease, cardiomyopathies, pericardial disease, pulmonary hypertension, etc.).\n"
+            "- Rank diagnoses from most to least likely based on the clinical data.\n"
+            "- Focus on concise, guideline-aligned procedure recommendations (e.g., ECG, troponins, "
+            "echocardiography, stress testing, cath/PCI, advanced imaging).\n"
+            "- Use short, clinical phrases only. Do not add explanations or extra sections.\n\n"
+            f"Patient information:\n{cleaned_context}\n\n"
+            "Format (exactly):\n"
+            "Diagnoses:\n"
+            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "Procedures:\n"
+            "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "Diagnoses:\n1."
+        )
+
+    def _postprocess_generated(self, raw: str) -> str:
+        if not raw.strip().startswith("Diagnoses:"):
+            return "Diagnoses:\n1. " + raw.lstrip()
+        return raw
+
+class RAGPredictor(BasePredictor):
     """Patient-note predictor that augments prompts with retrieved clinical knowledge."""
 
     def __init__(
@@ -497,15 +654,15 @@ class RAGPredictor:
         self.retriever = SemanticRetriever(self.store)
         self.top_k = top_k
 
-        self.generator = PromptOnlyGenerator(
-            model_name=model_name or DEFAULT_MODEL_NAME,
+        # Initialize the base class (generator + judge)
+        super().__init__(
+            model_name=model_name,
             generation_kwargs=generation_kwargs,
             text_pipeline=text_pipeline,
-        )
-        self.judge: AnswerJudge = answer_judge or LLMAnswerJudge(
-            model_name=judge_model_name or model_name or DEFAULT_MODEL_NAME,
-            generation_kwargs=judge_generation_kwargs,
-            text_pipeline=judge_pipeline,
+            answer_judge=answer_judge,
+            judge_model_name=judge_model_name,
+            judge_generation_kwargs=judge_generation_kwargs,
+            judge_pipeline=judge_pipeline,
         )
 
     def _format_evidence(self, retrieved: Sequence[Document]) -> str:
@@ -518,113 +675,38 @@ class RAGPredictor:
             ]
         )
 
-    def _build_prompt(
-        self, case: PatientCase, retrieved: Sequence[Document]
-    ) -> str:
-        knowledge_block = self._format_evidence(retrieved)
+    def _build_prompt(self, case: PatientCase) -> str:
+        cleaned_context = clean_patient_information(case.context)
+        # RAG-specific: retrieve documents and embed them into the prompt
+        retrieved_items = self.retriever.retrieve(case.context, top_k=self.top_k)
+        retrieved_docs = [item.document for item in retrieved_items]
+        knowledge_block = self._format_evidence(retrieved_docs)
+
         return (
-            "You are a clinical assistant. Read the patient information and use the provided clinical knowledge to "
-            "propose the most likely diagnoses and procedures. List the top 5 diagnoses followed by the top 5 procedures.\n\n"
-            f"Patient information:\n{case.context}\n\n"
+            "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
+            "cardiovascular disease using current evidence-based guidelines.\n\n"
+            "Read the patient information and identify the most likely *cardiac* diagnoses and the most "
+            "appropriate *cardiology-related* procedures.\n"
+            "- Prioritize cardiovascular conditions (ischemic heart disease, arrhythmias, heart failure, "
+            "valvular disease, cardiomyopathies, pericardial disease, pulmonary hypertension, etc.).\n"
+            "- Rank diagnoses from most to least likely based on the clinical data.\n"
+            "- Focus on concise, guideline-aligned procedure recommendations (e.g., ECG, troponins, "
+            "echocardiography, stress testing, cath/PCI, advanced imaging).\n"
+            "- Use short, clinical phrases only. Do not add explanations or extra sections.\n\n"
+            f"Patient information:\n{cleaned_context}\n\n"
             f"Retrieved clinical knowledge:\n{knowledge_block}\n\n"
-            "Format:\n"
+            "Format (exactly):\n"
             "Diagnoses:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
             "Procedures:\n"
             "1. ...\n2. ...\n3. ...\n4. ...\n5. ...\n"
+            "Diagnoses:\n1."
         )
-
-    def predict(self, case: PatientCase) -> PromptPrediction:
-        retrieved = self.retriever.retrieve(case.context, top_k=self.top_k)
-        prompt = self._build_prompt(case, [item.document for item in retrieved])
-        generated = self.generator.generate(prompt)
-
-        predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-        predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-        diag_precision, diag_recall, diag_verdicts = _judge_precision_recall(
-            predicted_diags,
-            case.diagnoses,
-            judge=self.judge,
-            patient_context=case.context,
-            label="diagnosis",
-            max_k=5,
-        )
-        proc_precision, proc_recall, proc_verdicts = _judge_precision_recall(
-            predicted_procs,
-            case.procedures,
-            judge=self.judge,
-            patient_context=case.context,
-            label="procedure",
-            max_k=5,
-        )
-
-        return PromptPrediction(
-            hadm_id=case.hadm_id,
-            generated_text=generated,
-            prompt=prompt,
-            predicted_diagnoses=predicted_diags,
-            predicted_procedures=predicted_procs,
-            ground_truth_diagnoses=list(case.diagnoses),
-            ground_truth_procedures=list(case.procedures),
-            diagnoses_precision_at_k=diag_precision,
-            diagnoses_recall_at_k=diag_recall,
-            procedures_precision_at_k=proc_precision,
-            procedures_recall_at_k=proc_recall,
-            diagnoses_judge_verdicts=diag_verdicts,
-            procedures_judge_verdicts=proc_verdicts,
-        )
-
-    def predict_many(self, cases: Sequence[PatientCase], batch_size: int | None = None) -> List[PromptPrediction]:
-        if not cases:
-            return []
-
-        retrieved_lists = [self.retriever.retrieve(case.context, top_k=self.top_k) for case in cases]
-        prompts = [self._build_prompt(case, [item.document for item in retrieved]) for case, retrieved in zip(cases, retrieved_lists)]
-        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
-
-        predictions: List[PromptPrediction] = []
-        for case, prompt, generated in zip(cases, prompts, generations):
-            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-            predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-            diag_precision, diag_recall, diag_verdicts = _judge_precision_recall(
-                predicted_diags,
-                case.diagnoses,
-                judge=self.judge,
-                patient_context=case.context,
-                label="diagnosis",
-                max_k=5,
-            )
-            proc_precision, proc_recall, proc_verdicts = _judge_precision_recall(
-                predicted_procs,
-                case.procedures,
-                judge=self.judge,
-                patient_context=case.context,
-                label="procedure",
-                max_k=5,
-            )
-
-            predictions.append(
-                PromptPrediction(
-                    hadm_id=case.hadm_id,
-                    generated_text=generated,
-                    prompt=prompt,
-                    predicted_diagnoses=predicted_diags,
-                    predicted_procedures=predicted_procs,
-                    ground_truth_diagnoses=list(case.diagnoses),
-                    ground_truth_procedures=list(case.procedures),
-                    diagnoses_precision_at_k=diag_precision,
-                    diagnoses_recall_at_k=diag_recall,
-                    procedures_precision_at_k=proc_precision,
-                    procedures_recall_at_k=proc_recall,
-                    diagnoses_judge_verdicts=diag_verdicts,
-                    procedures_judge_verdicts=proc_verdicts,
-                )
-            )
-
-        return predictions
-
+    
+    def _postprocess_generated(self, raw: str) -> str:
+        if not raw.strip().startswith("Diagnoses:"):
+            return "Diagnoses:\n1. " + raw.lstrip()
+        return raw
 
 def summarise_predictions(predictions: Iterable[PromptPrediction]) -> dict[str, float]:
     totals: MutableMapping[str, float] = {}
@@ -652,6 +734,5 @@ __all__ = [
     "PromptingPredictor",
     "RAGPredictor",
     "load_patient_cases",
-    "patient_cases_to_rag_queries",
     "summarise_predictions",
 ]
