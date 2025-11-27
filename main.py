@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=4,
+        default=8,
         help="Batch size for prompt-only baseline generation (for GPU efficiency).",
     )
     parser.add_argument(

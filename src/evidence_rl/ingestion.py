@@ -52,6 +52,9 @@ def _extract_pdf_text(path: Path) -> str:
             pages.append("")
     return "\n".join(pages)
 
+def _strip_numbering(title: str) -> str:
+    # Remove leading patterns like "1", "1.", "1.2", "1.2.3", "2.1." etc.
+    return re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", title).strip()
 
 def _iter_sections(text: str) -> Iterator[Tuple[str, str]]:
     """Yield ``(title, body)`` pairs for each detected section.
@@ -69,22 +72,33 @@ def _iter_sections(text: str) -> Iterator[Tuple[str, str]]:
 
     for line in lines:
         heading: str | None = None
+        
+        # numbered headings
         match = _SECTION_HEADING_RE.match(line)
         if match:
             heading = match.group(0).strip()
+        
+        # ALL CAPS headings
         elif line.strip().isupper() and 3 <= len(line.strip()) <= 120:
             heading = line.strip()
 
+        # If heading found and we have collected buffer from previous section
         if heading and buffer:
-            sections.append((current_title, "\n".join(buffer).strip()))
+            # prepend title to body
+            clean_title = _strip_numbering(current_title)
+            section_body = f"{clean_title}\n" + "\n".join(buffer).strip()
+            sections.append((current_title, section_body))
             buffer = []
             current_title = heading
             continue
 
         buffer.append(line)
 
+    # last section
     if buffer:
-        sections.append((current_title, "\n".join(buffer).strip()))
+        clean_title = _strip_numbering(current_title)
+        section_body = f"{clean_title}\n" + "\n".join(buffer).strip()
+        sections.append((current_title, section_body))
 
     if not sections and text.strip():
         yield "full_document", text.strip()
@@ -96,18 +110,28 @@ def _iter_sections(text: str) -> Iterator[Tuple[str, str]]:
 
 
 def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 80) -> List[str]:
+    """Chunk text within a single section.
+
+    - If len(tokens) <= chunk_size: return [text] as a single chunk.
+    - Else: sliding window with overlap, constrained to this text only.
+    """
     tokens = text.split()
-    if not tokens:
+    n_tokens = len(tokens)
+    if n_tokens == 0:
         return []
+
+    # If the whole section fits into one chunk, don't bother with overlap
+    if n_tokens <= chunk_size:
+        return [" ".join(tokens)]
 
     chunks: List[str] = []
     start = 0
-    while start < len(tokens):
-        end = min(len(tokens), start + chunk_size)
+    while start < n_tokens:
+        end = min(n_tokens, start + chunk_size)
         chunks.append(" ".join(tokens[start:end]))
-        if end == len(tokens):
+        if end == n_tokens:
             break
-        start = end - overlap
+        start = end - overlap  # overlap within this section only
     return chunks
 
 
@@ -128,7 +152,11 @@ def chunk_guideline_text(
     chunk_size: int = 400,
     overlap: int = 80,
 ) -> List[KnowledgeChunk]:
-    """Chunk a guideline's text into section-aware pieces for retrieval."""
+    """Chunk a guideline's text into section-aware pieces for retrieval.
+
+    - Each section from `_iter_sections` is chunked independently.
+    - No chunk ever spans multiple sections.
+    """
 
     chunks: List[KnowledgeChunk] = []
     section_index = 0
@@ -166,7 +194,7 @@ def load_pdf_knowledge_documents(
     if not base.exists():
         raise FileNotFoundError(f"Knowledge directory not found: {base}")
 
-    files = sorted([p for p in base.glob("**/*") if p.suffix.lower() in {".pdf", ".txt"}])
+    files = sorted([p for p in base.glob("**/*") if p.suffix.lower() in {".txt"}])
     if not files:
         raise ValueError(f"No PDF or text files found under {base}")
 

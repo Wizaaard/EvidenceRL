@@ -720,10 +720,10 @@ class RAGPredictor(BasePredictor):
         top_ids = [doc_id for doc_id, _ in ranked[: self.top_k]]
         return [docs_by_id[doc_id] for doc_id in top_ids]
 
-    def _build_prompt(
-        self, case: PatientCase, retrieved: Sequence[Document]
-    ) -> str:
-        knowledge_block = self._format_evidence(retrieved)
+    def _build_prompt(self, case: PatientCase) -> str:
+        cleaned_context = clean_patient_information(case.context)
+        retrieved_docs = self._retrieve_evidence(cleaned_context)
+        knowledge_block = self._format_evidence(retrieved_docs)
         return (
             "You are an expert cardiology clinical assistant. You specialize in diagnosing and managing "
             "cardiovascular disease using current evidence-based guidelines.\n\n"
