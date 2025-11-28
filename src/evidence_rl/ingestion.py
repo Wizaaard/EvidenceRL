@@ -213,7 +213,7 @@ def load_pdf_knowledge_documents(
 
     if not documents:
         raise ValueError(f"No retrievable chunks could be produced from {base}")
-
+    print("Number of documents in Medical knowledge", len(files))
     return documents
 
 

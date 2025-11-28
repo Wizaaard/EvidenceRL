@@ -363,9 +363,9 @@ def main(argv: list[str] | None = None) -> None:
         predictions = predictor.predict_many(patient_cases, batch_size=args.batch_size)
         summary = summarise_predictions(predictions)
 
-        for pred in predictions:
-            print(f"HADM {pred.hadm_id} predicted diagnoses: {pred.predicted_diagnoses}")
-            print(f"HADM {pred.hadm_id} predicted procedures: {pred.predicted_procedures}\n")
+        # for pred in predictions:
+        #     print(f"HADM {pred.hadm_id} predicted diagnoses: {pred.predicted_diagnoses}")
+        #     print(f"HADM {pred.hadm_id} predicted procedures: {pred.predicted_procedures}\n")
 
         print("Averaged precision/recall:")
         for key, value in sorted(summary.items()):
