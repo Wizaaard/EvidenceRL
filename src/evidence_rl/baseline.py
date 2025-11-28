@@ -141,42 +141,71 @@ def _judge_precision_recall(
     if max_k <= 0:
         raise ValueError("max_k must be positive")
 
-    preds = list(predicted[:max_k])
-    truths = [item for item in truth if item]
+    preds, truths, tasks = _build_judge_tasks(predicted, truth, patient_context, label, max_k)
+
     if not preds or not truths:
         zeros = {k: 0.0 for k in range(1, max_k + 1)}
         return zeros, zeros, [False for _ in preds]
 
-    queries: list[str] = []
-    answers: list[str] = []
-    ground_truths: list[str] = []
+    results = _run_judge_tasks(judge, tasks)
+    return _precision_recall_from_results(preds, truths, results, max_k)
+
+
+def _build_judge_tasks(
+    predicted: Sequence[str],
+    truth: Sequence[str],
+    patient_context: str,
+    label: str,
+    max_k: int,
+) -> tuple[list[str], list[str], list[tuple[str, str, str]]]:
+    """Prepare judge queries for all prediction/truth pairs up to *max_k*."""
+
+    preds = list(predicted[:max_k])
+    truths = [item for item in truth if item]
+    if not preds or not truths:
+        return preds, truths, []
+
+    tasks: list[tuple[str, str, str]] = []
     for pred in preds:
         for truth_item in truths:
-            query = (
-                f"Does the candidate {label} match the ground truth {label}?\n"
-                "Decide whether the candidate semantically matches the ground truth, "
-                "allowing for minor wording differences (e.g. synonyms, abbreviations) but not for "
-                "meaningful clinical differences.\n\n"
-                "Guidelines:\n"
-                "- Treat them as a TRUE if they refer to the same underlying clinical concept "
-                "  (e.g. 'acute decompensated heart failure' vs 'ADHF', or 'NSTEMI' vs "
-                "  'non-ST elevation myocardial infarction').\n"
-                "- Treat them as a FALSE if they differ in key clinical meaning, severity, "
-                "  acuity, or affected structure (e.g. 'mitral regurgitation' vs 'aortic stenosis', "
-                "  or 'stable angina' vs 'NSTEMI').\n"
-                "- Ignore differences in word order, punctuation, or capitalization.\n\n"
+            tasks.append(
+                (
+                    f"Does the candidate {label} match the ground truth {label}?\n"
+                    "Decide whether the candidate semantically matches the ground truth, "
+                    "allowing for minor wording differences (e.g. synonyms, abbreviations) but not for "
+                    "meaningful clinical differences.\n\n"
+                    "Guidelines:\n"
+                    "- Treat them as a TRUE if they refer to the same underlying clinical concept "
+                    "  (e.g. 'acute decompensated heart failure' vs 'ADHF', or 'NSTEMI' vs "
+                    "  'non-ST elevation myocardial infarction').\n"
+                    "- Treat them as a FALSE if they differ in key clinical meaning, severity, "
+                    "  acuity, or affected structure (e.g. 'mitral regurgitation' vs 'aortic stenosis', "
+                    "  or 'stable angina' vs 'NSTEMI').\n"
+                    "- Ignore differences in word order, punctuation, or capitalization.\n\n",
+                    pred,
+                    truth_item,
+                )
             )
-            queries.append(query)
-            answers.append(pred)
-            ground_truths.append(truth_item)
+    return preds, truths, tasks
 
+
+def _run_judge_tasks(judge: AnswerJudge, tasks: Sequence[tuple[str, str, str]]) -> list[bool]:
     if hasattr(judge, "is_correct_batch"):
-        results = judge.is_correct_batch(queries, answers, ground_truths)
-    else:
-        results = [
-            judge.is_correct(query=q, answer=a, ground_truth=g)
-            for q, a, g in zip(queries, answers, ground_truths)
-        ]
+        queries, answers, ground_truths = zip(*tasks) if tasks else ([], [], [])
+        return list(judge.is_correct_batch(list(queries), list(answers), list(ground_truths)))
+
+    return [judge.is_correct(query=q, answer=a, ground_truth=g) for q, a, g in tasks]
+
+
+def _precision_recall_from_results(
+    preds: Sequence[str],
+    truths: Sequence[str],
+    results: Sequence[bool],
+    max_k: int,
+) -> tuple[dict[int, float], dict[int, float], list[bool]]:
+    if not preds or not truths:
+        zeros = {k: 0.0 for k in range(1, max_k + 1)}
+        return zeros, zeros, [False for _ in preds]
 
     match_matrix = [[False for _ in truths] for _ in preds]
     idx = 0
@@ -211,6 +240,71 @@ def _judge_precision_recall(
     verdicts = [idx in hits_by_pred for idx in range(len(preds))]
 
     return precision_by_k, recall_by_k, verdicts
+
+
+def _batch_judge_scores(
+    cases: Sequence[PatientCase],
+    predicted_diags_list: Sequence[Sequence[str]],
+    predicted_procs_list: Sequence[Sequence[str]],
+    judge: AnswerJudge,
+    max_k: int = 5,
+) -> tuple[
+    list[dict[int, float]],
+    list[dict[int, float]],
+    list[list[bool]],
+    list[dict[int, float]],
+    list[dict[int, float]],
+    list[list[bool]],
+]:
+    """Batch LLM-judged precision/recall for diagnoses and procedures."""
+
+    num_cases = len(cases)
+    diag_precision = [{k: 0.0 for k in range(1, max_k + 1)} for _ in range(num_cases)]
+    diag_recall = [{k: 0.0 for k in range(1, max_k + 1)} for _ in range(num_cases)]
+    diag_verdicts: list[list[bool]] = [[] for _ in range(num_cases)]
+    proc_precision = [{k: 0.0 for k in range(1, max_k + 1)} for _ in range(num_cases)]
+    proc_recall = [{k: 0.0 for k in range(1, max_k + 1)} for _ in range(num_cases)]
+    proc_verdicts: list[list[bool]] = [[] for _ in range(num_cases)]
+
+    tasks: list[tuple[str, str, str]] = []
+    specs: list[tuple[str, int, list[str], list[str], int, int]] = []
+    cursor = 0
+
+    for idx, case in enumerate(cases):
+        diag_preds, diag_truths, diag_tasks = _build_judge_tasks(
+            predicted_diags_list[idx], case.diagnoses, case.context, "diagnosis", max_k
+        )
+        start = cursor
+        cursor += len(diag_tasks)
+        tasks.extend(diag_tasks)
+        specs.append(("diagnosis", idx, diag_preds, diag_truths, start, cursor))
+
+        proc_preds, proc_truths, proc_tasks = _build_judge_tasks(
+            predicted_procs_list[idx], case.procedures, case.context, "procedure", max_k
+        )
+        start = cursor
+        cursor += len(proc_tasks)
+        tasks.extend(proc_tasks)
+        specs.append(("procedure", idx, proc_preds, proc_truths, start, cursor))
+
+    results = _run_judge_tasks(judge, tasks) if tasks else []
+
+    for label, case_idx, preds, truths, start, end in specs:
+        slice_results = results[start:end] if end > start else []
+        precision_by_k, recall_by_k, verdicts = _precision_recall_from_results(
+            preds, truths, slice_results, max_k
+        )
+
+        if label == "diagnosis":
+            diag_precision[case_idx] = precision_by_k
+            diag_recall[case_idx] = recall_by_k
+            diag_verdicts[case_idx] = verdicts
+        else:
+            proc_precision[case_idx] = precision_by_k
+            proc_recall[case_idx] = recall_by_k
+            proc_verdicts[case_idx] = verdicts
+
+    return diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts
 
 
 @dataclass
@@ -558,19 +652,28 @@ class BasePredictor(ABC):
             return []
 
         prompts = [self._build_prompt(case) for case in cases]
-        generations_raw = self.generator.generate_batch(prompts, batch_size=batch_size)
+        generations = self.generator.generate_batch(prompts, batch_size=batch_size)
+
+        predicted_diags_list: list[list[str]] = []
+        predicted_procs_list: list[list[str]] = []
+        generations_list = list(generations)
+        for generated in generations_list:
+            predicted_diags_list.append(_parse_ranked_items(generated, "Diagnoses"))
+            predicted_procs_list.append(_parse_ranked_items(generated, "Procedures"))
+
+        (
+            diag_precision_list,
+            diag_recall_list,
+            diag_verdicts_list,
+            proc_precision_list,
+            proc_recall_list,
+            proc_verdicts_list,
+        ) = _batch_judge_scores(cases, predicted_diags_list, predicted_procs_list, self.judge, max_k=5)
 
         predictions: List[PromptPrediction] = []
-        for case, prompt, generated_raw in zip(cases, prompts, generations_raw):
-            generated = self._postprocess_generated(generated_raw)
-
-            predicted_diags = _parse_ranked_items(generated, "Diagnoses")
-            predicted_procs = _parse_ranked_items(generated, "Procedures")
-
-            diag_precision, diag_recall, diag_verdicts, proc_precision, proc_recall, proc_verdicts = self._score_predictions(
-                case, predicted_diags, predicted_procs
-            )
-
+        for idx, (case, prompt, generated) in enumerate(zip(cases, prompts, generations_list)):
+            predicted_diags = predicted_diags_list[idx]
+            predicted_procs = predicted_procs_list[idx]
             predictions.append(
                 PromptPrediction(
                     subject_id=getattr(case, "subject_id", None),
@@ -581,12 +684,12 @@ class BasePredictor(ABC):
                     predicted_procedures=predicted_procs,
                     ground_truth_diagnoses=list(case.diagnoses),
                     ground_truth_procedures=list(case.procedures),
-                    diagnoses_precision_at_k=diag_precision,
-                    diagnoses_recall_at_k=diag_recall,
-                    procedures_precision_at_k=proc_precision,
-                    procedures_recall_at_k=proc_recall,
-                    diagnoses_judge_verdicts=diag_verdicts,
-                    procedures_judge_verdicts=proc_verdicts,
+                    diagnoses_precision_at_k=diag_precision_list[idx],
+                    diagnoses_recall_at_k=diag_recall_list[idx],
+                    procedures_precision_at_k=proc_precision_list[idx],
+                    procedures_recall_at_k=proc_recall_list[idx],
+                    diagnoses_judge_verdicts=diag_verdicts_list[idx],
+                    procedures_judge_verdicts=proc_verdicts_list[idx],
                 )
             )
         return predictions
