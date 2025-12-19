@@ -98,8 +98,18 @@ class LLMAnswerJudge:
                 pipeline_kwargs["device"] = 0
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            if eos_token_id is not None:
+                try:
+                    tokenizer.pad_token_id = eos_token_id
+                except Exception:  # pragma: no cover - defensive for stub tokenizers
+                    pass
         model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
+            
         if not multi_gpu and pipeline_kwargs.get("device") == 0:
             model.to("cuda:0")
 

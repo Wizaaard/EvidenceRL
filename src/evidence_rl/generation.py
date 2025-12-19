@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol
-
+from math import ceil
 from .documents import RetrievedDocument
 try:
     from tqdm.auto import tqdm
