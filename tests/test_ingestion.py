@@ -1,8 +1,10 @@
+import sys
 from pathlib import Path
 
 from evidence_rl.ingestion import (
     chunk_guideline_text,
     export_documents_jsonl,
+    load_documents_from_hf_dataset,
     load_documents_from_jsonl,
     load_pdf_knowledge_documents,
 )
@@ -42,4 +44,34 @@ def test_load_pdf_knowledge_documents_supports_text_and_jsonl_roundtrip(tmp_path
 
     loaded = load_documents_from_jsonl(jsonl_path)
     assert loaded == documents
+
+
+def test_load_documents_from_hf_dataset_uses_text_field_and_limits(monkeypatch):
+    records = [
+        {"text": "Cardiology guidance chunk A."},
+        {"text": "Cardiology guidance chunk B."},
+        {"text": "Cardiology guidance chunk C."},
+    ]
+
+    class _FakeDataset(list):
+        pass
+
+    def _fake_load_dataset(name, split):
+        assert name == "ilyassacha/cardiologyChunks"
+        assert split == "train"
+        return _FakeDataset(records)
+
+    import types
+
+    fake_module = types.SimpleNamespace(load_dataset=_fake_load_dataset)
+    monkeypatch.setitem(sys.modules, "datasets", fake_module)
+
+    docs = load_documents_from_hf_dataset(
+        "ilyassacha/cardiologyChunks", split="train", text_field="text", max_records=2
+    )
+
+    assert len(docs) == 2
+    assert all(doc.metadata["source_dataset"] == "ilyassacha/cardiologyChunks" for doc in docs)
+    assert docs[0].doc_id.endswith("::train::0")
+    assert "chunk A" in docs[0].text
 

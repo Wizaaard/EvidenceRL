@@ -13,6 +13,7 @@ from .ingestion import (
     KnowledgeChunk,
     chunk_guideline_text,
     export_documents_jsonl,
+    load_documents_from_hf_dataset,
     load_documents_from_jsonl,
     load_pdf_knowledge_documents,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "KnowledgeChunk",
     "chunk_guideline_text",
     "export_documents_jsonl",
+    "load_documents_from_hf_dataset",
     "load_documents_from_jsonl",
     "load_pdf_knowledge_documents",
     "PatientCase",

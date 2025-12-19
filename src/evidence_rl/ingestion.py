@@ -213,7 +213,7 @@ def load_pdf_knowledge_documents(
 
     if not documents:
         raise ValueError(f"No retrievable chunks could be produced from {base}")
-    print("Number of documents in Medical knowledge", len(files))
+
     return documents
 
 
@@ -256,10 +256,57 @@ def load_documents_from_jsonl(jsonl_path: str | Path) -> List[Document]:
     return documents
 
 
+def load_documents_from_hf_dataset(
+    dataset: str,
+    *,
+    split: str = "train",
+    text_field: str = "text",
+    max_records: int | None = None,
+) -> List[Document]:
+    """Load pre-chunked knowledge directly from a Hugging Face dataset.
+
+    The dataset is expected to expose text chunks in ``text_field``. A small amount
+    of metadata (dataset name and split) is attached to each :class:`Document`.
+    """
+
+    try:
+        from datasets import load_dataset  # type: ignore
+    except ImportError as exc:  # pragma: no cover - exercised in integration only
+        raise RuntimeError(
+            "Install `datasets` to load knowledge from Hugging Face (pip install datasets)."
+        ) from exc
+
+    ds = load_dataset(dataset, split=split)
+
+    documents: List[Document] = []
+    for idx, row in enumerate(ds):
+        if max_records is not None and idx >= max_records:
+            break
+
+        text = row.get(text_field)
+        if not text:
+            continue
+
+        doc_id = f"{dataset}::{split}::{idx}"
+        documents.append(
+            Document(
+                doc_id=doc_id,
+                text=str(text),
+                metadata={"source_dataset": dataset, "split": split},
+            )
+        )
+
+    if not documents:
+        raise ValueError(f"No documents loaded from dataset {dataset} (split={split})")
+
+    return documents
+
+
 __all__ = [
     "KnowledgeChunk",
     "chunk_guideline_text",
     "export_documents_jsonl",
+    "load_documents_from_hf_dataset",
     "load_documents_from_jsonl",
     "load_pdf_knowledge_documents",
 ]

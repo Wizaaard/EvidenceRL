@@ -22,6 +22,7 @@ from evidence_rl import (
     export_documents_jsonl,
     load_cardiac_icd_documents,
     load_documents_from_jsonl,
+    load_documents_from_hf_dataset,
     load_patient_cases,
     load_pdf_knowledge_documents,
     summarise_predictions,
@@ -186,6 +187,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--knowledge-dataset",
+        default=None,
+        help=(
+            "Optional Hugging Face dataset name to load guideline chunks from, e.g. "
+            "ilyassacha/cardiologyChunks. If provided, RAG retrieval will source documents "
+            "directly from the dataset split instead of local PDFs/JSONL."
+        ),
+    )
+    parser.add_argument(
+        "--knowledge-dataset-split",
+        default="train",
+        help="Dataset split to load when using --knowledge-dataset (default: train).",
+    )
+    parser.add_argument(
+        "--knowledge-dataset-text-field",
+        default="text",
+        help="Name of the text field containing chunks in the Hugging Face dataset (default: text).",
+    )
+    parser.add_argument(
+        "--knowledge-dataset-max-records",
+        type=int,
+        default=None,
+        help=(
+            "Optional cap on the number of records to load from the Hugging Face dataset to "
+            "avoid pulling millions of chunks when experimenting."
+        ),
+    )
+    parser.add_argument(
         "--knowledge-jsonl",
         default=None,
         help=(
@@ -235,6 +264,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_documents_from_args(args) -> List[Document]:
+    if args.knowledge_dataset:
+        return load_documents_from_hf_dataset(
+            args.knowledge_dataset,
+            split=args.knowledge_dataset_split,
+            text_field=args.knowledge_dataset_text_field,
+            max_records=args.knowledge_dataset_max_records,
+        )
+
     knowledge_jsonl_path = Path(args.knowledge_jsonl) if args.knowledge_jsonl else None
     if knowledge_jsonl_path and knowledge_jsonl_path.exists():
         return load_documents_from_jsonl(knowledge_jsonl_path)

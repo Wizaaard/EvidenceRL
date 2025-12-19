@@ -88,7 +88,7 @@ the corpus and feed it directly into `RagRlPipeline`. The loader preserves ICD
 codes and representative titles in document metadata so the concept-aware
 retriever remains effective against the real knowledge base.
 
-### RAG baseline with clinical guideline PDFs
+### RAG baseline with clinical guideline PDFs or Hugging Face chunks
 
 If you maintain a folder of guideline PDFs (or `.txt` exports) under
 `Medical_Knowledge/`, you can use it as the RAG knowledge base instead of the
@@ -110,17 +110,36 @@ python main.py \
 ```
 
 If `--knowledge-jsonl` already exists, the chunks are loaded directly; if not,
-the processed chunks are exported to that path for future runs. You can also use
-the building blocks programmatically:
+the processed chunks are exported to that path for future runs. Alternatively,
+you can bypass local chunking and load a pre-chunked Hugging Face dataset (for
+example `ilyassacha/cardiologyChunks`) via `--knowledge-dataset` and related
+flags:
+
+```bash
+python main.py \
+  --knowledge-dataset ilyassacha/cardiologyChunks \
+  --knowledge-dataset-split train \
+  --knowledge-dataset-text-field text \
+  --knowledge-dataset-max-records 50000
+```
+
+Use `--knowledge-dataset-max-records` to sample a manageable subset when the
+dataset contains millions of rows. You can also use the building blocks
+programmatically:
 
 ```python
-from evidence_rl import load_pdf_knowledge_documents, export_documents_jsonl
+from evidence_rl import (
+    load_documents_from_hf_dataset,
+    load_pdf_knowledge_documents,
+    export_documents_jsonl,
+)
 docs = load_pdf_knowledge_documents("/path/to/Medical_Knowledge", chunk_size=400, overlap=80)
 export_documents_jsonl(docs, "knowledge.jsonl")
-```
+hf_docs = load_documents_from_hf_dataset("ilyassacha/cardiologyChunks", max_records=1000)
 
 The resulting documents can be fed into `DocumentStore` for embedding and
 retrieval or supplied directly to `RagRlPipeline`.
+```
 
 ### Prompt-only baseline on patient notes
 

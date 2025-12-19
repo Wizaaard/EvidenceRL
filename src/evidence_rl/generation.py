@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol
 
 from .documents import RetrievedDocument
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    print("Warning: tqdm not installed. No progress bar will be shown. Install with 'pip install tqdm'.")
+    tqdm = None
 
 
 DEFAULT_MODEL_NAME = "sshleifer/tiny-gpt2"
@@ -93,7 +98,17 @@ class HuggingFaceGenerator:
                 pipeline_kwargs["device"] = 0
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            if eos_token_id is not None:
+                try:
+                    tokenizer.pad_token_id = eos_token_id
+                except Exception:  # pragma: no cover - defensive for stub tokenizers
+                    pass
         model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
 
         if not multi_gpu and pipeline_kwargs.get("device") == 0:
             model.to("cuda:0")
@@ -202,7 +217,17 @@ class PromptOnlyGenerator:
                 pipeline_kwargs["device"] = 0
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            if eos_token_id is not None:
+                try:
+                    tokenizer.pad_token_id = eos_token_id
+                except Exception:  # pragma: no cover - defensive for stub tokenizers
+                    pass
         model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
 
         if not multi_gpu and pipeline_kwargs.get("device") == 0:
             model.to("cuda:0")
@@ -230,35 +255,76 @@ class PromptOnlyGenerator:
         trimmed = generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
         return trimmed or generated
 
-    def generate_batch(self, prompts: Iterable[str], batch_size: int | None = None) -> List[str]:
-        """Generate text for multiple prompts in a single, batched pipeline call."""
+    def generate_batch(
+        self,
+        prompts: Iterable[str],
+        batch_size: int | None = None,
+        show_progress: bool = True,
+    ) -> List[str]:
+        """Generate text for multiple prompts, with optional progress bar."""
 
         prompt_list = list(prompts)
         if not prompt_list:
             return []
-
+ 
+        # copy base kwargs
         kwargs = dict(self._generation_kwargs)
-        if batch_size is not None:
-            kwargs["batch_size"] = batch_size
 
-        try:
-            outputs = self._pipeline(prompt_list, **kwargs)
-        except TypeError:
-            return [self.generate(prompt) for prompt in prompt_list]
+        # Choose an effective batch size:
+        # - if user passed one, use it
+        # - otherwise, fall back to length (single call = old behavior)
+        effective_bs = batch_size or len(prompt_list)
+
+        # We *won't* pass batch_size to the pipeline now, since we're chunking ourselves.
+        kwargs.pop("batch_size", None)
+
+        indices = range(0, len(prompt_list), effective_bs)
+        if show_progress and tqdm is not None:
+            indices = tqdm(
+                indices,
+                total=ceil(len(prompt_list) / effective_bs),
+                desc="Generating",
+            )
 
         results: List[str] = []
-        for prompt, output in zip(prompt_list, outputs):
-            if not output:
-                results.append("")
-                continue
-            generated = output[0].get("generated_text") or output[0].get("text") or ""
-            trimmed = (
-                generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
-            )
-            results.append(trimmed or generated)
+
+        try:
+            for start in indices:
+                end = start + effective_bs
+                batch_prompts = prompt_list[start:end]
+
+                # batched call
+                outputs = self._pipeline(batch_prompts, **kwargs)
+
+                # HF text-generation pipeline returns List[List[dict]]
+                for prompt, output in zip(batch_prompts, outputs):
+                    if not output:
+                        results.append("")
+                        continue
+
+                    generated = (
+                        output[0].get("generated_text")
+                        or output[0].get("text")
+                        or ""
+                    )
+                    trimmed = (
+                        generated[len(prompt):].strip()
+                        if generated.startswith(prompt)
+                        else generated.strip()
+                    )
+                    results.append(trimmed or generated)
+
+        except TypeError:
+            # Fallback: pipeline doesn't support list -> run per prompt (still with progress)
+            per_prompt_iter = prompt_list
+            if show_progress and tqdm is not None:
+                per_prompt_iter = tqdm(prompt_list, desc="Generating")
+
+            results = [self.generate(p) for p in per_prompt_iter]
 
         if prompt_list:
             self.last_prompt = prompt_list[-1]
+
         return results
 
 
