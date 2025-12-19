@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol
 
 from .documents import RetrievedDocument
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    print("Warning: tqdm not installed. No progress bar will be shown. Install with 'pip install tqdm'.")
+    tqdm = None
 
 
 DEFAULT_MODEL_NAME = "sshleifer/tiny-gpt2"
@@ -42,10 +47,20 @@ class HuggingFaceGenerator:
 
     def __post_init__(self) -> None:
         base_kwargs: MutableMapping[str, Any] = {
-            "max_new_tokens": 128,
-            "return_full_text": True,
-            "do_sample": False,
+            # --- sampling ---
+            "do_sample": True,
+            "temperature": 0.8,          # 0.7–0.9 usually good
+            "top_p": 0.9,                # nucleus sampling
+            "top_k": 50,                 # cap the candidate set
+            # --- length & formatting ---
+            "max_new_tokens": 256,       # reduce if answers should be short
+            "return_full_text": False,   # usually cleaner for post-processing
+            # --- repetition controls ---
+            "repetition_penalty": 1.15,  # 1.05–1.25; higher = stronger penalty
+            "no_repeat_ngram_size": 4,   # prevents exact n-gram repeats
+            "renormalize_logits": True,  # keeps logits sane after penalties
         }
+
         if self.generation_kwargs:
             base_kwargs.update(dict(self.generation_kwargs))
         self._generation_kwargs = dict(base_kwargs)
@@ -154,9 +169,18 @@ class PromptOnlyGenerator:
 
     def __post_init__(self) -> None:
         base_kwargs: MutableMapping[str, Any] = {
-            "max_new_tokens": 128,
-            "return_full_text": True,
-            "do_sample": False,
+            # --- sampling ---
+            "do_sample": True,
+            "temperature": 0.8,          # 0.7–0.9 usually good
+            "top_p": 0.9,                # nucleus sampling
+            "top_k": 50,                 # cap the candidate set
+            # --- length & formatting ---
+            "max_new_tokens": 256,       # reduce if answers should be short
+            "return_full_text": False,   # usually cleaner for post-processing
+            # --- repetition controls ---
+            "repetition_penalty": 1.15,  # 1.05–1.25; higher = stronger penalty
+            "no_repeat_ngram_size": 4,   # prevents exact n-gram repeats
+            "renormalize_logits": True,  # keeps logits sane after penalties
         }
         if self.generation_kwargs:
             base_kwargs.update(dict(self.generation_kwargs))
@@ -231,35 +255,76 @@ class PromptOnlyGenerator:
         trimmed = generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
         return trimmed or generated
 
-    def generate_batch(self, prompts: Iterable[str], batch_size: int | None = None) -> List[str]:
-        """Generate text for multiple prompts in a single, batched pipeline call."""
+    def generate_batch(
+        self,
+        prompts: Iterable[str],
+        batch_size: int | None = None,
+        show_progress: bool = True,
+    ) -> List[str]:
+        """Generate text for multiple prompts, with optional progress bar."""
 
         prompt_list = list(prompts)
         if not prompt_list:
             return []
-
+ 
+        # copy base kwargs
         kwargs = dict(self._generation_kwargs)
-        if batch_size is not None:
-            kwargs["batch_size"] = batch_size
 
-        try:
-            outputs = self._pipeline(prompt_list, **kwargs)
-        except TypeError:
-            return [self.generate(prompt) for prompt in prompt_list]
+        # Choose an effective batch size:
+        # - if user passed one, use it
+        # - otherwise, fall back to length (single call = old behavior)
+        effective_bs = batch_size or len(prompt_list)
+
+        # We *won't* pass batch_size to the pipeline now, since we're chunking ourselves.
+        kwargs.pop("batch_size", None)
+
+        indices = range(0, len(prompt_list), effective_bs)
+        if show_progress and tqdm is not None:
+            indices = tqdm(
+                indices,
+                total=ceil(len(prompt_list) / effective_bs),
+                desc="Generating",
+            )
 
         results: List[str] = []
-        for prompt, output in zip(prompt_list, outputs):
-            if not output:
-                results.append("")
-                continue
-            generated = output[0].get("generated_text") or output[0].get("text") or ""
-            trimmed = (
-                generated[len(prompt) :].strip() if generated.startswith(prompt) else generated.strip()
-            )
-            results.append(trimmed or generated)
+
+        try:
+            for start in indices:
+                end = start + effective_bs
+                batch_prompts = prompt_list[start:end]
+
+                # batched call
+                outputs = self._pipeline(batch_prompts, **kwargs)
+
+                # HF text-generation pipeline returns List[List[dict]]
+                for prompt, output in zip(batch_prompts, outputs):
+                    if not output:
+                        results.append("")
+                        continue
+
+                    generated = (
+                        output[0].get("generated_text")
+                        or output[0].get("text")
+                        or ""
+                    )
+                    trimmed = (
+                        generated[len(prompt):].strip()
+                        if generated.startswith(prompt)
+                        else generated.strip()
+                    )
+                    results.append(trimmed or generated)
+
+        except TypeError:
+            # Fallback: pipeline doesn't support list -> run per prompt (still with progress)
+            per_prompt_iter = prompt_list
+            if show_progress and tqdm is not None:
+                per_prompt_iter = tqdm(prompt_list, desc="Generating")
+
+            results = [self.generate(p) for p in per_prompt_iter]
 
         if prompt_list:
             self.last_prompt = prompt_list[-1]
+
         return results
 
 
