@@ -16,14 +16,14 @@ if str(SRC_PATH) not in sys.path:
 from evidence_rl import (
     Document,
     PromptingPredictor,
+    RAGPredictor,
     RagRlPipeline,
     RagRlResult,
     export_documents_jsonl,
     load_cardiac_icd_documents,
-    load_documents_from_hf_dataset,
     load_documents_from_jsonl,
+    load_documents_from_hf_dataset,
     load_patient_cases,
-    patient_cases_to_rag_queries,
     load_pdf_knowledge_documents,
     summarise_predictions,
 )  # noqa: E402
@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=4,
+        default=8,
         help="Batch size for prompt-only baseline generation (for GPU efficiency).",
     )
     parser.add_argument(
@@ -400,9 +400,9 @@ def main(argv: list[str] | None = None) -> None:
         predictions = predictor.predict_many(patient_cases, batch_size=args.batch_size)
         summary = summarise_predictions(predictions)
 
-        for pred in predictions:
-            print(f"HADM {pred.hadm_id} predicted diagnoses: {pred.predicted_diagnoses}")
-            print(f"HADM {pred.hadm_id} predicted procedures: {pred.predicted_procedures}\n")
+        # for pred in predictions:
+        #     print(f"HADM {pred.hadm_id} predicted diagnoses: {pred.predicted_diagnoses}")
+        #     print(f"HADM {pred.hadm_id} predicted procedures: {pred.predicted_procedures}\n")
 
         print("Averaged precision/recall:")
         for key, value in sorted(summary.items()):
@@ -417,6 +417,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             payload = {
                 "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
                 "predictions": [pred.to_dict() for pred in predictions],
                 "summary": summary,
             }
@@ -444,51 +445,56 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     documents = load_documents_from_args(args)
-
-    try:
-        pipeline = RagRlPipeline(
-            documents,
-            top_k=3,
+    
+    if patient_cases and args.patient_pipeline == "rag":
+        predictor = RAGPredictor(
             model_name=args.model_name,
             judge_model_name=args.judge_model_name,
             embedding_model_name=args.embedding_model_name,
+            documents=documents
         )
-    except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
-        if exc.name == "transformers":
-            print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
-            return
-        raise
+        predictions = predictor.predict_many(patient_cases, batch_size=args.batch_size)
+        summary = summarise_predictions(predictions)
 
-    per_case_dir: Path | None = None
-    summary_path: Path | None = None
-    if args.json_output:
-        output_path = Path(args.json_output)
-        if output_path.suffix.lower() == ".json":
-            summary_path = output_path
-        else:
-            per_case_dir = output_path
-            summary_path = output_path / "results.json"
+        print("Averaged precision/recall:")
+        for key, value in sorted(summary.items()):
+            print(f"  {key}: {value:.3f}")
 
-    cases = SAMPLE_CASES
-    if patient_cases and args.patient_pipeline == "rag":
-        cases = patient_cases_to_rag_queries(patient_cases)
+        if args.json_output:
+            output_path = Path(args.json_output)
+            judge_output_path = (
+                output_path.with_stem(output_path.stem + "_judge_details")
+                if output_path.suffix
+                else output_path / "judge_details.json"
+            )
+            payload = {
+                "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
+                "predictions": [pred.to_dict() for pred in predictions],
+                "summary": summary,
+            }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
+            print(f"Saved JSON results to {output_path.resolve()}")
 
-    results = run_cases(pipeline, cases, save_dir=per_case_dir)
-
-    if args.plot_dir:
-        plot_distributions(results, args.plot_dir)
-        print(f"Saved plots to {Path(args.plot_dir).resolve()}")
-
-    if summary_path is not None:
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "model_name": getattr(pipeline.generator, "model_name", args.model_name),
-            "judge_model_name": getattr(pipeline.judge, "model_name", args.judge_model_name),
-            "results": [result.to_dict() for result in results],
-        }
-        with summary_path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-        print(f"Saved JSON results to {summary_path.resolve()}")
+            judge_payload = {
+                "model_name": getattr(predictor.generator, "model_name", args.model_name),
+                "judge_model_name": getattr(predictor.judge, "model_name", args.judge_model_name),
+                "cases": [
+                    {
+                        "hadm_id": pred.hadm_id,
+                        "diagnoses": [detail.to_dict() for detail in pred.diagnoses_judge_details],
+                        "procedures": [detail.to_dict() for detail in pred.procedures_judge_details],
+                    }
+                    for pred in predictions
+                ],
+            }
+            judge_output_path.parent.mkdir(parents=True, exist_ok=True)
+            with judge_output_path.open("w", encoding="utf-8") as handle:
+                json.dump(judge_payload, handle, indent=2, ensure_ascii=False)
+            print(f"Saved judge details to {judge_output_path.resolve()}")
+        return
 
 
 if __name__ == "__main__":

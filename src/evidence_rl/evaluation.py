@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol, Sequence
+from tqdm.auto import tqdm
 
 from .generation import DEFAULT_MODEL_NAME
 
@@ -124,8 +125,18 @@ class LLMAnswerJudge:
                 pipeline_kwargs["device"] = 0
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            if eos_token_id is not None:
+                try:
+                    tokenizer.pad_token_id = eos_token_id
+                except Exception:  # pragma: no cover - defensive for stub tokenizers
+                    pass
         model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-
+        if getattr(model, "config", None) is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
+            
         if not multi_gpu and pipeline_kwargs.get("device") == 0:
             model.to("cuda:0")
 
@@ -142,14 +153,15 @@ class LLMAnswerJudge:
             tokenizer=tokenizer,
             **pipeline_kwargs,
         )
-
+        
     def _build_prompt(self, query: str, answer: str, ground_truth: str) -> str:
         return (
-            "You are an impartial medical examiner that verifies answers.\n"
-            "Compare the candidate answer with the gold standard and reply with\n"
-            "only 'correct' or 'incorrect'.\n\n"
+            "You are an impartial evaluator tasked with judging the equivalence of two answers.\n"
+            "Compare the candidate answer with the ground truth and decide if they convey the same meaning.\n"
+            "Respond only with 'True' if the candidate answer is semantically equivalent to the ground truth, "
+            "or 'False' otherwise.\n\n"
             f"Question: {query}\n"
-            f"Gold standard answer: {ground_truth}\n"
+            f"Ground truth: {ground_truth}\n"
             f"Candidate answer: {answer}\n\n"
             "Verdict:"
         )
@@ -181,7 +193,7 @@ class LLMAnswerJudge:
         self.last_answer = verdict
         self.last_verdicts = [verdict]
         self.last_outputs = [raw_output] if raw_output is not None else []
-        return verdict.startswith("correct")
+        return verdict.startswith("true")
 
     def is_correct_batch(
         self,
@@ -206,7 +218,7 @@ class LLMAnswerJudge:
         self.last_answer = verdicts[-1] if verdicts else None
         self.last_verdicts = verdicts
         self.last_outputs = raw_outputs
-        return [verdict.startswith("correct") for verdict in verdicts]
+        return [verdict.startswith("true") for verdict in verdicts]
 
 
 __all__ = ["AnswerJudge", "LLMAnswerJudge", "JudgeVerdictDetail"]
