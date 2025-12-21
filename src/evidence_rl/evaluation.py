@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Protocol, Sequence
+from tqdm.auto import tqdm
 
 from .generation import DEFAULT_MODEL_NAME
 

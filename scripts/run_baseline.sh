@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ---------- CONFIGURABLE DEFAULTS ----------
-MODEL_ID="gemma-3-4b"
-MODEL_NAME="/home/hice1/jtamo3/bmed-sp-wang/YuxingData/Checkpoints/vllm_models/gemma-3-4b-it"
+MODEL_ID="gemma-3-1b"
+MODEL_NAME="/home/hice1/jtamo3/bmed-sp-wang/Ben/Checkpoints/gemma-3-1b-it"
 JUDGE_MODEL_NAME="/home/hice1/jtamo3/scratch/models/cache/models--meta-llama--Llama-3.1-8B/snapshots/d04e592bb4f6aa9cfee91e2e20afa771667e1d4b"
 PATIENT_DATA_PATH="/home/hice1/jtamo3/bmed-sp-wang/Ben/Data/physionet.org/files/mimic-iv-ext-cardiac-disease/1.0.0"
 KNOWLEDGE_PATH="/home/hice1/jtamo3/bmed-sp-wang/Ben/Data/Medical-Cardiac-Knowledge"
@@ -17,7 +17,7 @@ KNOWLEDGE_DATASET_SPLIT="train"
 KNOWLEDGE_DATASET_FIELD="text"
 KNOWLEDGE_DATASET_MAX_RECORD="50000"
 
-# Default max patients; can be overridden by first arg
+# Default max patients; can be overridden by first arg (default 10)
 MAX_PATIENTS="${1:-10}"
 
 # Second arg = version number (default 0.1)

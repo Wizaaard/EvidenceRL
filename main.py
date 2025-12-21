@@ -452,48 +452,48 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Saved JSON results to {output_path.resolve()}")
         return
 
-    try:
-        pipeline = RagRlPipeline(
-            documents,
-            top_k=3,
-            model_name=args.model_name,
-            judge_model_name=args.judge_model_name,
-            embedding_model_name=args.embedding_model_name,
-        )
-    except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
-        if exc.name == "transformers":
-            print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
-            return
-        raise
+    # try:
+    #     pipeline = RagRlPipeline(
+    #         documents,
+    #         top_k=3,
+    #         model_name=args.model_name,
+    #         judge_model_name=args.judge_model_name,
+    #         embedding_model_name=args.embedding_model_name,
+    #     )
+    # except ModuleNotFoundError as exc:  # pragma: no cover - user feedback path
+    #     if exc.name == "transformers":
+    #         print("Install the 'transformers' package to run the demo (e.g., pip install transformers).")
+    #         return
+    #     raise
 
-    per_case_dir: Path | None = None
-    summary_path: Path | None = None
-    if args.json_output:
-        output_path = Path(args.json_output)
-        if output_path.suffix.lower() == ".json":
-            summary_path = output_path
-        else:
-            per_case_dir = output_path
-            summary_path = output_path / "results.json"
+    # per_case_dir: Path | None = None
+    # summary_path: Path | None = None
+    # if args.json_output:
+    #     output_path = Path(args.json_output)
+    #     if output_path.suffix.lower() == ".json":
+    #         summary_path = output_path
+    #     else:
+    #         per_case_dir = output_path
+    #         summary_path = output_path / "results.json"
 
-    cases = SAMPLE_CASES
+    # cases = SAMPLE_CASES
 
-    results = run_cases(pipeline, cases, save_dir=per_case_dir)
+    # results = run_cases(pipeline, cases, save_dir=per_case_dir)
 
-    if args.plot_dir:
-        plot_distributions(results, args.plot_dir)
-        print(f"Saved plots to {Path(args.plot_dir).resolve()}")
+    # if args.plot_dir:
+    #     plot_distributions(results, args.plot_dir)
+    #     print(f"Saved plots to {Path(args.plot_dir).resolve()}")
 
-    if summary_path is not None:
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "model_name": getattr(pipeline.generator, "model_name", args.model_name),
-            "judge_model_name": getattr(pipeline.judge, "model_name", args.judge_model_name),
-            "results": [result.to_dict() for result in results],
-        }
-        with summary_path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-        print(f"Saved JSON results to {summary_path.resolve()}")
+    # if summary_path is not None:
+    #     summary_path.parent.mkdir(parents=True, exist_ok=True)
+    #     payload = {
+    #         "model_name": getattr(pipeline.generator, "model_name", args.model_name),
+    #         "judge_model_name": getattr(pipeline.judge, "model_name", args.judge_model_name),
+    #         "results": [result.to_dict() for result in results],
+    #     }
+    #     with summary_path.open("w", encoding="utf-8") as handle:
+    #         json.dump(payload, handle, indent=2, ensure_ascii=False)
+    #     print(f"Saved JSON results to {summary_path.resolve()}")
 
 
 if __name__ == "__main__":

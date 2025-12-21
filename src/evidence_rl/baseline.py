@@ -658,6 +658,7 @@ class BasePredictor(ABC):
         predicted_procs_list: list[list[str]] = []
         generations_list = list(generations)
         for generated in generations_list:
+            generated = self._postprocess_generated(generated)
             predicted_diags_list.append(_parse_ranked_items(generated, "Diagnoses"))
             predicted_procs_list.append(_parse_ranked_items(generated, "Procedures"))
 
