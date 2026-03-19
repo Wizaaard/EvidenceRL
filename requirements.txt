@@ -1,0 +1,42 @@
+# EvidenceRL Requirements
+# Install with: pip install -r requirements.txt
+
+# Core ML
+torch>=2.0.0
+transformers>=4.40.0
+sentence-transformers>=2.2.0
+accelerate>=0.25.0
+
+# HuggingFace utilities
+huggingface_hub>=0.20.0
+datasets>=2.14.0
+safetensors
+
+# Scientific computing
+numpy<2.0
+pandas
+scipy
+
+# Visualization
+matplotlib
+seaborn
+
+# Utilities
+tqdm
+pyyaml
+
+# Development
+pytest
+ipython
+
+# Fast vector search (requires CUDA)
+faiss-gpu>=1.7.2
+# Or for CPU-only: faiss-cpu>=1.7.2
+
+# Optional: Vector stores
+# chromadb
+# qdrant-client
+# pinecone-client
+
+# Optional: PDF processing
+# pypdf

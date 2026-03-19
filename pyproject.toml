@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evidence-rl"
+version = "0.1.0"
+description = "Reinforcing Evidence Consistency for Trustworthy Language Models"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "sentence-transformers>=2.2.0",
+    "accelerate>=0.25.0",
+    "huggingface_hub>=0.20.0",
+    "datasets>=2.14.0",
+    "safetensors",
+    "numpy<2.0",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "tqdm",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ipython",
+    "jupyter",
+    "jupyterlab",
+]
+faiss-gpu = [
+    "faiss-gpu>=1.7.2",
+]
+faiss-cpu = [
+    "faiss-cpu>=1.7.2",
+]
+vector-stores = [
+    "chromadb",
+    "qdrant-client",
+    "pinecone-client",
+]
+all = [
+    "evidence-rl[dev,faiss-gpu,vector-stores]",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/EvidenceRL"
+Documentation = "https://github.com/yourusername/EvidenceRL/tree/main/docs"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.yaml", "*.yml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # Line too long (handled by formatter)

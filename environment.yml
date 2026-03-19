@@ -1,0 +1,46 @@
+name: evidencerl
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+
+dependencies:
+  # Python
+  - python=3.11
+
+  # PyTorch with CUDA support
+  - pytorch>=2.0
+  - pytorch-cuda=12.1
+  - torchvision
+  - torchaudio
+
+  # Core scientific computing
+  - numpy<2.0
+  - pandas
+  - scipy
+
+  # Visualization
+  - matplotlib
+  - seaborn
+
+  # Development tools
+  - pytest
+  - ipython
+
+  # Utilities
+  - tqdm
+  - pyyaml
+
+  # Fast vector search (from conda-forge)
+  - faiss-gpu>=1.7.2
+
+  # Pip dependencies (not available or better via pip)
+  - pip
+  - pip:
+      # HuggingFace ecosystem
+      - transformers>=4.40.0
+      - sentence-transformers>=2.2.0
+      - huggingface_hub>=0.20.0
+      - datasets>=2.14.0
+      - accelerate>=0.25.0
+      - safetensors
